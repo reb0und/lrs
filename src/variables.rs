@@ -6,7 +6,7 @@ fn main() {
     let a = 1 + 2;
     let b = 1.0 - 42.1;
     let c = 12 * 5;
-    
+
     // If doing some similar operation and receing ints, should convert to float
     let truncated = 32 / 12;
     let d = 8 / 5;
@@ -16,7 +16,7 @@ fn main() {
     let tf: bool = true;
 
     let letter: char = 'x';
-    
+
     println!("tf: {tf}, letter: {letter}");
 
     // Compound primitives
@@ -30,7 +30,7 @@ fn main() {
 
     // Arrays
     let l: [i8; 4] = [1, 2, 3, 4];
-    
+
     let f = l[0];
     println!("{f}");
 }

@@ -54,7 +54,7 @@ Enables Rust to make memory safety guarantees without needing a garbage collecto
     let s2 = s1;```
 - `String` is made up of 3 parts: pointer to the memory contents of the string, a length, a capacity all stored on the stack
 - The length is how much memory (in bytes) the contents of the `String` are currently using
-- The capacity is the total amount of memory (in bytes) that the `String` has received from teh allocator
+- The capacity is the total amount of memory (in bytes) that the `String` has received from the allocator
 - When `s1` is assigned to `s2`, `String` data is copied, meaning the pointer, length, and capacity that are on stack are copied
    - Data on heap that pointer refers to is not copied
 - When `s1` and `s2` go out of scope, they will both try to free the same memory, known as a double free error, can lead to memory corruption -> security vulnerabilities
@@ -96,4 +96,3 @@ Enables Rust to make memory safety guarantees without needing a garbage collecto
 - Returning values can also transfer ownership
 - Ownership of a variable follows the same pattern every time: assigning a value to another variable moves it
 - When a variable that includes data on the heap goes out of scope, the value will be cleaned up by drop
-- To let a function use a value butnot take ownership, make use of references

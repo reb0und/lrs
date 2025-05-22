@@ -19,11 +19,11 @@
    - This restriction preventing multiple references to the same data at the same time allows for controlled mutation, limits data races at compile time
    - Data races are similar to race conditions and occur when these happen
       - Two or more pointers access the same data at the same time
-      - At least one of the pointers is being used to write teh data
+      - At least one of the pointers is being used to write the data
       - There is no mechanism to synchronize access to the data
    - Data races cause undefined behavior and are difficult to diagnose and track down at runtime, Rust refuses to compile code with data races
    - Cannot borrow something as a mutable that is also borrowed as immutable
-   - A reference's starts from where it is introduced and continues throguh the last time that reference is used
+   - A reference starts from where it is introduced and continues throguh the last time that reference is used
    - Cannot have references that overlap scope, basically create mutable references while immutable references exist because that can result in data races
    - Compiler can tell reference is no longer being used a point before the end of the scope
 

@@ -1,3 +1,0 @@
-# Vectors
-
-## Common Collections

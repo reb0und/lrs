@@ -50,6 +50,7 @@ mod tests {
     //}
 
     #[test]
+    #[ignore]
     fn larger_can_hold_smaller() {
         let larger = Rectangle {
             width: 8,

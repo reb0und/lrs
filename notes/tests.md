@@ -97,4 +97,78 @@
 - Running `cargo test --help` displays options that can be used with `cargo test`, and running `cargo test -- --help` displays the options that can be used after the separator
 
 ### Running Testrs in Parallel or Consecutively
-- 
+- By default, tests run in parallel using threads, must make sure tests do not depend on each other or on any shared state, including a shared environment such as current workding directory or environment variables
+- If tests should not run in parallel or tests should have a limited number of threads, can use the `--test-threads` flag and the number of threads to use to test the binary
+   - Example: `cargo test -- --test-threads=1`
+   - Here, number of threads is set to `1`, telling the program not to use any parallelism, running tests using one thread will take longer than runnign them in parlalel, but tests won't interfere with each other if they share state
+
+### Showing Function Output
+- By default, Rust's testing library captures anything printed to standard output. If calling `println!` in a function and test passes, won't see `println!` output in the terminal, will only see line indicating test passed, if test fails, will see whatever was printed to standard output with error message
+- To see printed values for passing tests as well, can tell Rust to show the output of successful tests with `cargo test -- --show-output` flag
+
+### Running a Subset of Tests by Name
+- Since running a full test can take a long time, can run only the tests pertaining to code in a particular area, can choose which tests to run by passing `cargo test` the name or names of the tests to run as an argument
+
+#### Running Single Tests
+- Can run single tests with `cargo run <test_name>` to run only that test
+- Test output will indicate that more tests did not run by displaying the amount of filtered out tests at the end, can specify the names of multiple tests in this way, only the fist values given to `cargo test` will be used
+
+#### Filtering to Run Multiple Tests
+- Can specify part of a test name and any test whose name matches that value will be run
+- Example: `cargo test can`, runs all tests with `can` in their names
+- note that module in which a test appears becomes part of the test's name, can run all tests in a module by filtering the module's name
+
+### Ignoring Some Tests Unless Specifically Requested
+- Sometimes a few specific tests can be very time-consuming to execute, may want to exclude them during runs of `cargo test`
+- To do this, can annotate time-consuming tests with `ignore` attribute to exclude them `#[ignore]`
+- To run ignored tests use `cargo test -- --ignored`
+- By controlling which tests run, can make sure `cargo test` results will be returned quickly, when at a good point where it makes sense to check the results of `ignored tests`, can run `cargo test -- --ignored` instead, to run all tests whether they're ignored or not, can run `cargo test -- --include-ignored`
+
+## Test Organization
+- Rust community thinks of tests in terms of two main categories: unit tests and integration tests
+   - Unit tests are small and more focused, testing one module in isolation at a time, and can test private interfaces
+   - Integration tests are entirely external to library and use code in the same way any other external code would, using only the public interface and potentially exercising multiple modules per test 
+
+### Unit Tests
+- Purpose of unit tests is to test each unit of code in isolation from the test of the code to quickly pinpoint where code isn't working as expected, unit tests will go in src directory in each file with code that is tested, convention is to create a module named `tests` in each file to contain the test functions and to annotate the module with `cfg(test)`
+
+#### The Tests Module and `#[cfg(test)]`
+- The `#[cfg(test)]` annotation on the `tests` module tells Rust to compile and run the test code only when running `cargo test`, not running `cargo build`, saving compile time when only want to build the library and saves space in the resultant compiled artifact because the tests are not included
+- Since integration tests go in a different directory, they don't need the `#[cfg(test)]` annotation, since unit tests go in the same files as the code, can use `#[cfg(test)]` annotation to specify that they shouldn't be included in the compiled result
+- Attribute `cfg` stands for configuratio, indicates to `Rust` that the following item should only be included given a certain configuration option
+- In this case, the configuration option is `test`, provided by Rust for compiling and running tests, by using `cfg` attribute, Cargo compiles test code only if actively running the tests with `cargo test`, including any helper functions that might be within this module, in addition to the functions annotated with `#[test]`
+
+#### Testing Private Functions
+- Rust's privacy rules allow testing of private functions by placing the private code in the ancestor or parent module and testing in child module
+
+### Integration Tests
+- In Rust, integration tests are entirely external to a library, they use the library in the same way any other code would, which means they only call functions that are part of library's public API, their purpose is to test whether many parts of a library work together correctly, units of code that work correctly on their own could have problems when integrated so test coverage of the integrated code is important as well, to create integration tests, need a tests directory
+
+#### The tests Directory
+- tests directory goes at the top level of proejct directory, next to src, Cargo knows to look for integration test files in this directory, can make as many test files and Cargo will lcompile each file as an individual crate
+- Example: ```
+      use lrs::add_two;
+
+      #[test]
+      fn it_adds_two() {
+          let result = add_two(5);
+          assert_eq!(result, 7);
+      }```
+- Each file in the tests directory is a separate crate, need to bring the library into each test crate's scope, need to bring code tested into scope
+- Don't need to annotate any code in the file with `#[cfg(test)]`, Cargo treats the tests directory specially and compiles files in this directory only when running `cargo test`
+- If any test in a section fails, the following sections will not be run, if a unit test fails, there won't be any output for integration and doc tests since those tests are only run if all unit tests are passing
+- Each integration test file has its own section, adding more files into the tests directory will result in more integration test sections
+- Can still run a particular integrtion test function by specifying the test function's name as an argument to `cargo test`, to run all the tests in a particular integration test file, use the `--test` argument of `cargo test` followed by the name of the file, for example `cargo test --test integration_test`
+
+#### Submodules in Integration Tests
+- With more integration tests, may want to make more files in the tests directory to help organize them, for example, can group test functions by the functionality they're testing, each file in the tests directory, each file in the tests directory is compiled as its own separate crate, which is useful for creating separate scopes to more closely imitate the way end users will be using crate, however, this means more files in teh tests directory don't share the same behavior as files in src do
+- Different behavior of tests directory files is more noticeable given a set of helper functions to use in multiple integration test files and try to extract them into a common module, for example if creating a tests/common.rs and place a function named `setup` in it, can add some code to `setup` to call from multiple test files, having a `common` module appears in teh test results which is unintended, to avoid having `common` appear in the test output, insteaf of creating tests/common.rs, can create tests/common/mod.rs, this is the older convention that Rust also understands, naming the file this way indicates to Rust not ot treat the `common` module as an integration test file
+- Naming the file this way indicates to not treat the `common` module as an integration test file
+- After creating tests/common/mod.rs, can use it from any of the integrtion test files as a module
+
+#### Integration Tests for Binary Crates
+- If project is a binary crate that only contains a src/main.rs file and doesn't have a src/lib.rs file, can't create ingration tests in the tests directory and bring functions defined in the src/main.rs file into scope with a `use` statement, only library crates expose functions that other crates can use, binary crates are meant to be run on their own
+- This is one of the reasons that Rust projects provide a binary and have a straightforward src/main.rs file that calls logic that lives in the src/lib.rs file, using that structure, integration tests can test the library crate with `use` to make the important functionality is available, if the important functionality works, the small amount of code in the src/main.rs will work as well and that small amount of code doesn't need to be tested
+
+### Summary
+- Rust's testing features provide a way to specify how code should function to ensure it continues to work as expected, even as changes are made, unit tests exercise different parts of a library separately and can test private implementation details, integration tests check that many parts of a library work together correctly and they use the library's public API to test the code in the same way external code will use it, despite Rust's type system and ownership rules to help prevent some kinds of bugs, tests are still important to reduce logic bugs having to do with how code is expected to behave

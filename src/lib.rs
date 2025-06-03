@@ -1,105 +1,55 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+use std::env;
+use std::fs;
+use std::error::Error;
+
+
+pub fn run(config: Config) -> Result<(), Box<dyn Error>>{
+   let contents = fs::read_to_string(&config.file_path)?;
+
+    println!("file contents: \n{contents}");
+
+    Ok(())
 }
 
-pub fn add_two(i: i32) -> i32 {
-    i + 2
+pub struct Config {
+    pub query: String,
+    pub file_path: String,
 }
 
-pub struct Guess {
-    value: i32,
-}
-
-impl Guess {
-    pub fn new(value: i32) -> Guess {
-        if value > 100 || value < 100 {
-            panic!("input out of bounds");
+impl Config {
+    pub fn build(args: &[String]) -> Result<Config, &'static str> {
+        if args.len() < 3 {
+            return Err("not enough arguments");
         }
 
-        Guess {
-            value
+        let query = args[1].clone();
+        let file_path = args[2].clone();
+
+        Ok(Config {
+            query,
+            file_path,
+        })
+    }
+
+    fn new(args: &[String]) -> Config {
+        if args.len() < 3 {
+            panic!("not enough arguments");
+        }
+
+        let query = args[1].clone();
+        let file_path = args[2].clone();
+
+        Config {
+            query,
+            file_path,
         }
     }
 }
 
-#[derive(Debug)]
-struct Rectangle {
-    width: u32,
-    height: u32,
-}
+fn parse_config(args: &[String]) -> Config {
+    Config::new(args);
+    let query = args[1].clone();
+    let file_path = args[2].clone();
 
-impl Rectangle {
-    fn can_hold(&self, other: &Rectangle) -> bool {
-        self.width > other.height && self.height > other.height
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn exploration() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-    
-    //#[test]
-    //fn another() {
-    //    panic!("fail");
-    //}
-
-    #[test]
-    #[ignore]
-    fn larger_can_hold_smaller() {
-        let larger = Rectangle {
-            width: 8,
-            height: 7,
-        };
-
-        let smaller = Rectangle {
-            width: 7,
-            height: 6,
-        };
-
-        assert!(larger.can_hold(&smaller));
-    }
-
-    #[test]
-    fn smaller_cannot_hold_larger() {
-        let larger = Rectangle {
-            width: 8,
-            height: 7,
-        };
-
-        let smaller = Rectangle {
-            width: 7,
-            height: 6,
-        };
-
-        assert!(!smaller.can_hold(&larger));
-    }
-
-    #[test]
-    fn it_adds_two() {
-        let result = add_two(2);
-        assert_eq!(result, 4);
-    }
-
-    #[test]
-    #[should_panic(expected = "out of bounds")]
-    fn greater_than_100() {
-        Guess::new(101);
-    }
-
-    #[test]
-    fn it_works() -> Result<(), String> {
-        let result = add(2, 2);
-
-        if result == 4 {
-            Ok(())
-        } else {
-            Err(String::from("2 + 2 != 4"))
-        }
-    }
+    Config { query, file_path }
 }

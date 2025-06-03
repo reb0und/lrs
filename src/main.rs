@@ -2,5 +2,10 @@ use std::env;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    dbg!(args);
+
+    let query = &args[1];
+    let file_path = &args[2];
+
+    println!("searching for {query}");
+    println!("in file {file_path}");
 }

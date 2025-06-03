@@ -26,3 +26,204 @@
    - Can call `collect` method on an iterator to turn it into a collection such as a vector that contains all the elements the iterator produces
 - First, must bring the `std::env` module into scope with a `use` statement to use `args` function, nested in two levels of modules, in places where function is nested in more than one module, bring parent module into scope rather than the function, doing so can easily use other functions from `std::env`, also less ambiguous than adding `use std::env::args` and then claling a function with just `args`, since `args` can be mistaken for a function in current module
 - On the first line of `main`, `env::args` is called and `collect` is used to turn the iterator into a vector containing all the values produced by the iterator, `collect` is used to create many kinds of collections, specify in annotation of `args` that this should be a vector of strings, rarely need to annotate types in Rust, need to do so on `collect` because it cannot infer the type of collection, vector is printed using debug macro
+
+### Reading a File
+- Can use `std::fs`, `read_to_string` function that takes a reference to a file path 
+- ```let contents = fs::read_to_string(&file_path).expect("should be able to read file");```
+- Current flaws:
+   - At the moment, `main` has multiple responsibilities
+   - Functions are clearer and easier to maintain if each function is responsible for only one idea
+   - Other problem is that errors are not handled well, as program grows, it will be harder to fix errors cleanly, good practice to begin refactoring early on when developing a program because it's much easier to refactor smaller amounts of code
+
+### Refacting to Improve Modularity and Error Handling
+- To improve program, will fix four problems to do with program's structure and how it's handling errors
+   - Current main function parses arguments and reads files and as program grows, number of separate tasks in `main` function will increase and as it grows, will become difficult to reason about, harder to test, and harder to change without breaking one if its parts
+   - Therefore, it is best to separate functionality so each function is responsible for one task
+- Additionally, since `query` and `file_path` are configuration variables to program variables like `contents` are used to perform the program's logic, the longer `main` becomes, the more variables that are needed to be brought into scope, and the more variables brought into scope, the more difficult it will be to keep track of the purpose of each
+   - It is best to group the configuration variables into a singular structure to clarify their purpose
+- Third problem is that `expect` is used to print an error message after reading from a file fials, but the error message lacks detail, since reading from a file can fail in many ways, file could be missing, or may not have permission to open it, same error would be printed for everything
+- Since `expect` is used to handle the error and if user runs program without specifying enough arguments, will get an `index out of bounds` error from Rust that doens't clearly explain the problem
+   - Would be best if all error-handling code was in one place, so future maintainers only need to look to one place to consult the code if the error handling logic needed to change, can also ensure printing messages that are meaningful to end users
+
+#### Separation of Concerns for Binary Projects
+- Organizational problem of allocating responsibility for multiple tasks to the `main` function is common to many binary projects, resultingly, the Rust community has developed guidelines for splitting the separate concerns of a binary program when `main` starts getting large
+   - Split program into a main.rs file and a lib.rs file and move program's logic to lib.rs
+   - As long as command line parsing logic is small, it can remain in main.rs
+   - When the command line parsing logic begins getting complicated, extract it from main.rs and move it to lib.rs
+- The responsibilities that remain in the `main` function after this process should be limited to the following:
+   - Calling the command line parsing logic with the argument values
+   - Setting up any other configuration
+   - Calling a `run` function in lib.rs
+   - Handling the error if `run` returns an error
+- This pattern is about separating concerns: main.rs handles running the program and lib.rs handles the logic of the task at hand
+- Since `main` function cannot be directly tests, this structure allows for full test coverage my moving it into functions in lib.rs
+- The code that remains in main.rs, will be small enough to verify its correctness by reading it
+
+##### Extracting the Argument Parser
+- Example: ```fn parse_config(args: &[String]) -> (&str, &str) {
+                      let query = &args[1];
+                      let file_path = &args[2];
+
+                      (query, file_path)
+                 }```
+- Still collecting command arguments into a vector but instea of assigning the argument value at index 1 to the variable `query` and value at index 2 to the variable `file_path` within `main`, pass the whole vector to the `parse_config` function, this function then holds the logic that determines which argument goes in which variable and passes the values back to `main`, `query` and `file_path` variables stll created in `main` but `main` no longer has the responsibility of determining how the commadn line arguments and variables correspond
+
+##### Grouping Configuration Values
+- Since `parse_config` returns a tuple that is immediately broken up into individual parts, may be sign to use a different abstraction
+- Another indicator that there is room for improvement is the `config` part of `parse_config` which implies that the two values returned are related and are both part of one configuration value
+- Currently not conveying the meaning in the structure of the data other than by grouping the two values into a tuple, can instead put the two values into one struct and give each of the struct fields a meaningful name, doing so makes it much easier for future maintainers of code to understand how the different values relate to each other and what their purpose is
+- Have added a struct named `Config` defined to have fields named `query` and `file_path`
+- Example: ```
+      struct Config {
+          query: String,
+          file_path: String,
+      }```
+- Added a struct named `Config` defined to have fields named `query` and `file_path`, the signature of `parse_config` now indicates that it returns a `Config` value, in body of `parse_config` where string slices used to be returned that reference `String` values in `args`, now defined `Config` to contain owned `String` values, the `args` variable in `main` is the owner of the argument values and is only letting the `parse_config` function borrow them, which means taking ownership of the values in `args` would violate Rust's borrowing rules
+- There are a number of ways to manage the `String` data, the easiest route is to call `clone` on the values, making a full copy of the data for the `Config` instance to own, taking more time and memory than storing a reference to the string data, however, cloning the data makes the code very straightforward since there is no need to manage the lifetimes of the references
+- `main` has been updated so it places the isntance of `Config` returned by `parse_config` into a variable named `config` and code that previously used the separate `query` and `file_path` variables so they now use the fields on the `Config` struct instead
+- Now code clearly conveys that `query` and `file_path` are related and that their purpose is to configure how the program will work, any code using these values knows to find them in the `config` instance in the fields named for their purpose
+
+#### The Trade-Offs of Using `clone`
+- There is a tendency to avoid using `clone` to fix ownership problems because of its runtime cost
+
+#### Creating a Constructor for Config
+- Since `Config` struct exists name the related purpose of `query` and `file_path` and to be able to return values' names as struct field names from the `parse_config` function
+- Since `parse_config` function's purpose is to create a `Config` isntance, can change `parse_config` from plain function to a function named `new` that is associated with the `Config` struct, making code more idiomatic, similar to creating instances of types in the standard library such as `String`, calling `String::new`, also allows creation of instances of `Config` by calling `Config::new`
+- Updated `main` to use `Config::new` instead of `parse_config`, changed the name of `parse_config` to `new` and moved it within an `impl` block, associating the `new` function with `Config`
+- Example: ```
+      impl Config {
+          fn new(args: &[String]) -> Config {
+              let query = args[1].clone();
+              let file_path = args[2].clone();
+
+              Config {
+                  query,
+                  file_path,
+              }
+          }
+      }```
+- 
+
+#### Fixing the Error Handling
+- Since attempting to access the values in the `args` vector at index 1 or 2 will cause program to panic if vector contains fewer than three items, need to handle this erroneous behavior: `index out of bounds`
+- Need to help end users undetstand what they should do instead
+
+##### Improving the Error Message
+- Can add a check in the `new` function that will verify that the slice is long enough before accessing elements at indices 1 and 2 but if slice isn't long enough, program panics and displays a better error message
+- Example: ```
+        if args.len() < 3 {
+            panic!("not enough arguments");
+        }```
+- Checking that the length if `args` is at least `3` and the rest of the function can operate under the assumption that this condition has been met, if `args` has fewer than `3` items, this condition will be `true`, and `panic!` macro is called to end the program immediately
+- Unwated part of this is extraneous information not for users, as a solution, should turn to a `Result` that indicates success or an error
+
+##### Returning a `Result` instead of Calling `panic!`
+- Can instead return a `Result` value that will contain a `Config` instance in the successful case and will describe the problem in the error case
+- Will also need to change the function name from `new` to `build` because programmers expect `new` functions to never fail, when `Config::build` is communicating to `main`, can use `Result` type to signal that there was a problem, can change `main` to convert an `Err` variant into a more practical error for users without surrounding text
+- Example: ```
+    fn build(args: &[string]) -> result<config, &'static str> {
+        if args.len() < 3 {
+            return err("not enough arguments");
+        }
+
+        let query = args[1].clone();
+        let file_path = args[2].clone();
+
+        ok(config {
+            query,
+            file_path,
+        })
+    }```
+- `build` function returns a `Result` with a `Config` instance in the success case and a string literal in the error case, in this program, errors will always be string literals that have the `'static` lifetime
+- Instead of calling `panic!` when the user doesn't pass enough argumnts, now return an `Err` value and wrapped the `Config` return value in an `Ok`, these chnages make the function conform to its new type signature
+- Returning an `Err` value from `Config::build` allows the `main` function to handle the `Result` value returned from the `build` function and exit the process more cleanly in the error case
+
+##### Calling `Config::build` and Handling Errors
+- To handle the error case and print a user-friendly message, need to update `main` function to handle the `Result` being returned by `Config::build`, will also take the responsibility of exiting the command line tool with a nonzero error code away from `panic!` and implement it by hand, a nonzero exit status is a convention to signal to the process that called the program that the program exited with an error state
+- Example: ```
+    let config = Config::build(&args).unwrap_or_else(|err| {
+        println!("Problem parsing arguments: {err}");
+        process::exit(1);
+    });```
+- This code uses an uncovered method `unwrap_or_else`, which is defined on `Result<T, E>` by the standard library, that allows the definition of some custom non-`panic!` error handling, if the `Result` is an `Ok` value, method's behavior is similar to `unwrap`, returns the inner value that `Ok` is wrapping, if value is an `Err` value, method calls the code in the closure, which is an anonymous function, defined and passed as an argument to `unwrap_or_else`, note that `unwrap_or_else` will pass the inner value of the `Err`, in this case is the static string `"not enough arguments"`, added to the closure in the argument `err` that appears between the vertical pipes, the code in the closure can then use the `err` value when it runs
+- Have added a new `use` line to bring `process` from the standard library into scope
+   - Code in closure that will be run in the rror case is only two lines: print the `err` value, and then call `process::exit`, this function will stop the program immediately and return the number that was passed as the exit status code
+
+#### Extracting Logic from `main`
+- After refactoring the configuration parsing, the program's logic needs review
+- All logic currently in the `main` function that isn't involved with setting up configuration or handling errors will be placed in `run`, after completion, `main` will be very concise and easy to verify by inspection and can write tests for all the other logic
+- Example: ```
+         fn run(config: Config) {
+             let contents = fs::read_to_string(&config.file_path)
+                 .expect("should be able to read file");
+
+             println!("file contents: \n{contents}");
+         }```
+- The `run` function takes the `Config` instance as an argument
+
+##### Returning Errors from the `run` Function
+- With remaining program logic separated into the run function, can imrpove the error handling as done with `Config::build`, instead of allowing the program to panic by calling expect, the `run` function will return a `Result<T, E>` when something goes wrong, letting the logic around handling errors be further consolidated into `main` in a user-friendly way
+- Example: ```
+fn run(config: Config) -> Result<(), Box<dyn Error>>{
+    let contents = fs::read_to_string(&config.file_path)
+        .expect("should be able to read file");
+
+    println!("file contents: \n{contents}");
+
+    Ok(())
+}```()
+- Made three significant changes here, changed the return type of the `run` function to `Result<(), Box<dyn Error>>`, this function previously returned the unit type `()`, which is now kept as the value returned in the `Ok` case
+- For the error type, used the trait object `Box<dyn Error>` and brought into scope by with a `use` statement with `std:error::Error`, `Box<dyn Error>` is a trait object that means the function will return a type that implements the `Error` trait but don't need to specify what particular type the return value will be, providing flexibility to return error values that may be of different types in different error cases, `dyn` keyword is short for dynamic
+- Secondly, have removed the call to `expect` in favor of the `?` operator, which will return the error value from the current function for the caller to handle
+- Third, `run` function now returns an `Ok` value in the success case, this has declared the `run` function's success type as `()` in the signature, which means need to wrap the unit type value in the `Ok` value, this is the idiomatic way to indicate that `run` is being called for its side effects only and does not return a needed value
+
+##### Handling Errors Returned from `run` in `main`
+- Using `if let` rather than `unwrap_or_else` to check whether `run` returns an `Err` value and to call `proces::exit(1)` if so, `run` does not return a value to `unwrap` in the same way that `Config::build` returns the `Config` instance since `run` returns `()` in the success case, only care about detecting an error, don't need `unwrap_or_else` to return the unwrapped value which would only be `()`
+- Example: ```
+    if let Err(e) = run(config) {
+        println!("Application error: {e}");
+        process::exit(1);
+    }```
+
+#### Splitting Code into a Library Crate
+- Need to split src/main.rs file and put some code into src/lib.rs, this way, can test the code and have a src/main.rs file with fewer responsibilities, need to move the following code that isn't in the `main` function from src/main.rs to src/lib.rs
+   - The `run` function definition
+   - The relevant `use` statements
+   - The definition of `Config`
+   - The `Config::build` function definition
+- Made frequent use of `pub` keyword on `Config`, on its fields, and its `build` method and on the `run` function
+- Need to bring the code moved to src/lib.rs into the scope of the binary crate in src/main.rs with `use minigrep::Config` to bring the `Config` tyupe from the library crate into the binary crate's scope and prefix the `run` function with crate name, all functionality should be connected and should work
+- Example: ```
+use std::env;
+use std::fs;
+use std::error::Error;
+
+
+pub fn run(config: Config) -> Result<(), Box<dyn Error>>{
+    let contents = fs::read_to_string(&config.file_path)?;
+
+    println!("file contents: \n{contents}");
+
+    Ok(())
+}
+
+pub struct Config {
+    pub query: String,
+    pub file_path: String,
+}
+
+impl Config {
+    pub fn build(args: &[String]) -> Result<Config, &'static str> {
+        if args.len() < 3 {
+            return Err("not enough arguments");
+        }
+
+        let query = args[1].clone();
+        let file_path = args[2].clone();
+
+        Ok(Config {
+            query,
+            file_path,
+        })
+    }
+}```

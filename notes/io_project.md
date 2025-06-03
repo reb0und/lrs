@@ -227,3 +227,5 @@ impl Config {
         })
     }
 }```
+
+### Devloping the Library's Functionality with Test-Driven Development

@@ -229,3 +229,72 @@ impl Config {
 }```
 
 ### Devloping the Library's Functionality with Test-Driven Development
+- Moving logic into src/lib.rs and argument collecting and error handling to src/main.rs makes it much easier to write tests for the core functionality of code, can call functions directly with various arguments and check return values without having to call binary from command line
+- Adding searching logic to `minigrep` using test-driven development process (TDD):
+   - Write a test that fails and run it to make sure it fails for expected reasons
+   - Write or modify enough code to make the new test pass
+   - Refactor new code to ensure tests continue to pass
+   - Repeat from step 1
+- TDD can help drive code design, writing the test before writing the code that makes the test pass
+- Testing the implementation of the functionality that will actually do the searching for the query string in the file contents, producing a list of lines that match the query, can add this functionality in a function called `search`
+
+#### Writing a Failing Test
+- Can add a `tests` module with a test function to specify the behavior `search` function should have, will take a query and the text to search and will return only the lines from the text that contain the query
+- Example: ```
+    fn one_result() {
+        let query = "duct";
+        let contents = "\
+Rust:
+safe, fast, productive.
+Pick three.";
+
+        assert_eq!(vec!["safe, fast, productive."], search(query, contents));
+    }```
+- Test searches for string `"duct"` in a three line string, only one line contains `"duct"`, note that the backslash after the opening double quote tells Rust not to put a newline character at the beginning of the contents of the string literal, assert that the value returned from the `search` function contains only the expected line
+- Example ```
+pub fn search<'a>(query: &str, contents: &'a str) -> Vec<&'a str> {
+    vec![]
+}```
+- Need to define an explicit lifetime `'a` in the signature of `search` and use that lifetime with the `contents` argument and the return value, lifetime parameters specify which argument lifetime is connected to the lifetime of the return value, in this case it is indicated that the returned vector should contain string slices that referce slices of the argument `contents` rather than `query`
+- Indicating to Rust that the data returned by the `search` function will live as long as the data passed to the `contents` argument, the data referenced by a slice needs to be valid for the reference to be valid, since Rust cannot tell which of the two arguments are needed, it needs to be told explicitly
+   - Since `contents` is the argument that contains all of the text and it should return the parts of the text that match, `contents` is the argument that should be connected to the return value using the lifetime syntax
+
+#### Writing Code to Pass the Test
+- To fix and implement `search`, program needs to do the following:
+   - Iterate through each line of the contents
+   - Check whether the line contains the query string
+   - If it does, add it to the list of values returned
+   - If not, do nothing
+   - Return the list of results that match
+
+##### Iterating Through Lines with the `lines` Method
+- Rust has a helpful method to handle line-by-line iteration of strings, named `lines`, the `lines` method returns an iterator
+- Example: `for line in contents.lines() {}`
+
+##### Searching Each Line for the Query
+- To check whether the current line contains the query string, strings have a `contains` method for this, need to return a value from the body
+- Example: `if line.contains(query) {}`
+
+##### Storing Matching Lines
+- Need a way to store the matching lines to return, for this can make a mutable vector before the `for` loop and call the `push` method to store a `line` in the vector, after the `for` loop, return the vector
+- Example: ```
+pub fn search<'a>(query: &str, contents: &'a str) -> Vec<&'a str> {
+    let mut results = Vec::new();
+
+    for line in contents.lines() {
+        if line.contains(query) {
+            results.push(line);
+        }
+    }
+
+    results
+}```
+
+##### Using the `search` function in the `run` Function
+- Need to pass the `config.query` value and the `contents` that `run` reads from the file to the search function, then `run` will print each line returned from `search`
+- Example ```
+    for line in search(&config.query, &contents) {
+        println!("{line}");
+    }```
+
+### Working with Environment Variables

@@ -298,3 +298,20 @@ pub fn search<'a>(query: &str, contents: &'a str) -> Vec<&'a str> {
     }```
 
 ### Working with Environment Variables
+Can improve this by adding an option for case-insensitive searching that user can enable via an environmental variable, allowing users to set the environment variable once and have all searches be case insensitive
+
+#### Writing a Failing Test for the Case-Insensitive `search` Function
+- Can add a new `search_case_insensitive` function that will be called when the environment variable has a value
+
+##### Implementing the `search_case_insensitive` Function
+- Can call `to_lowercase` on the string to convert to lowercase and then compare
+- Can fetch environment variables after bringing `std::env` into scope and using the `var` function
+- Example `let ignore_case = env::var("IGNORE_CASE").is_ok();`
+- `is_ok` method returns a boolean that is true if it received an `Ok` value and `false` if `Err`
+
+### Writing Error Messages to Standard Error Instead of Standard Output
+- In most terminals, there are two kinds of output: standard output `stdout` for general information and standard error `stderr` for error messages, this distinction enables users to choose to direct the successful output of a program to a file but still print error messages to the screen
+
+#### Checking Where Errors Are Written
+- Can redirect `stdout` to file with `cargo run > output.txt`
+- Standard library provides the `eprintln!` macro to print to the standard error stream

@@ -123,3 +123,113 @@ let n = example_closure(5);```
     });```
 - This is an alternative approach to count the number of times the closure is called, this closure works with `sort_by_key` because it is only capturing a mutable reference to the `num_sort_operations` counter and can therefore be called more than once
 - `Fn` traits are important when defining or using functions or types that make use of closures
+
+## Processing a Series of Items with Iterators
+- The iterator pattern allows task to be performed on a sequence of items in turn, an iterator is responsible for the logic of iterating over each item and determining when the sequence has finished, when using iterators this logic does not need to be reimplemented
+- In Rust, iterators are lazy, meaning they have no effect until methods are called that consume the iterator to use it up
+- Example: ```
+    let v1 = vec![1, 2, 3];
+
+    let v1_iter = v1.iter();```
+   - This creates an iterator over the items in the vector `v1` by calling the `iter` method defined on `Vec<T>`
+   - The iterator is stored in the `v1_iter` variable, once created, it can be used in a variety of ways, iterating over an array with a `for` loop to execute some code on each of its items, under the hood this implicitly created and then consumed an iterator 
+- Example: ```
+    for val in v1_iter {
+        println!("{val}");
+    }```
+   - Can separate the creation of the iterator from the use of the iterator in the `for` loop, when the `for` loop is called using the iterator in `v1_iter`, each element in the iterator is used in one iteration of the loop, printing out each value
+- In other languages, would write this same functionality by starting a variable at index 0, using that variable to index into the vector to get a value, incrememting the variable value in a loop until it reached the total number of items in the vector
+- Iterators handle all of this logic, cutting down on repetitive code, that could potentially be messed up, iterators also provide more flexibility to use the same logic with many different kinds of sequences, not just data structures that can be indexed into like vectors
+
+### The `Iterator` Trait and the `next` Method
+- All iterators implemenet a trait named `Iterator` that is defined in the standard library
+- Example: ```
+pub trait Iterator {
+   type Item;
+
+   fn next(&mut self) -> Option<Self::Item>;
+}```
+- This is an example of the definition of the `Iterator` trait
+- This definition uses `type Item` and `Self::Item`, which define an associated type with this trait, implementing `Iterator` trait requires that an `Item` type is also defined and used in the return type of the `next` method, the `Item` type will also be the type returned from the iterator
+- The `Iterator` trait only requires implementors to define one method: the `next` method, which returns one item of the iterator at a time, wrapped in `Some` and when the iteration is over, returns `None`
+- Can call the `next` method on iterators directly
+- Example: ```
+assert_eq!(v1_iter.next(), Some(&1));
+assert_eq!(v1_iter.next(), Some(&2));
+assert_eq!(v1_iter.next(), None);```
+- This demonstrates what values are returned from repeated calls to `next` on the iterator created from the vector
+- Note that need to make `v1_iter` mutable: calling the `next` method on an iterator changes the internal state that the iterator uses to keep track of where it is in the sequence, in other words, this consumes or uses up the iterator. Each call to `next` eats up an item from the iterator, don't need to make `v1_iter` mutable  when using a `for` loop since the loop took ownership of `v1_iter` and made it mutable
+- Also note that the values from calls to `next` are immutable references to the values in the vector, the `iter` method produces an iterator over immutable references, to create an iterator that takes ownership of `v1` and returns owned values, can call `into_iter` instead of `iter`, similarly, to iterate over mutable references, can call `iter_mut` instead of `iter`
+
+### Methods That Consume the Iterator
+- THe `iterator` trait has a number of different methods with default implementations provided by the standard library, some of these methods call the `next` method in their definition, which is why implementing the `next` method is required when implementing the `Iterator` trait
+- Methods that call `next` are called consuming adapters because calling them uses up the iterator, one example is the `sum` method, which takes ownership of the iterator and iterates through the items by repeatedly calling `next`, consuming the iterator, as it iterates through, it adds each item to a running total and returns the total when the iteration is complete
+- Example: ```
+    let total: i32 = v1_iter.sum();
+
+    assert_eq!(total, 6);```
+   - This is an example of the `sum` method
+- Cannot use `v1_iter` after the call to `sum` because `sum` takes ownership of the iterator it's called on
+
+### Methods that Produce Other Iterators
+- Iterator adaptors are methods defined on the `Iterator` trait that don't consume the iterator, instead, producing different iterators by changing some aspect of the original iterator
+- Example: `v1.iter().map(|x| x + 1);`
+   - This calls the iterator adapter method `map`, which takes a closure call on each item as the items are iterated through, the `map` method returns a new iterator that produces the modified items, the closure then creates a new iterator in which each item from the vector will be incremented by 1
+   - This specifies a closure that never gets called because iterator adapters are lazy and the iterator needs to be consumed here
+   - To fix this and consume the iterator, can use the `collect` method that consumes the iterator and collects the resultant values into a collection data type
+   - Example: `let v2: Vec<_> = v1.iter().map(|x| x + 1).collect();`
+      - The results of iterating over the iterator that's returned from the call to `map` into a vector are collected
+- Since `map` takes a closure, can specify any operation to perform on each item, example of how closures allow customization of behavior while reusing the iteration behavior tbhat the `Iterator` trait provides
+- Can chain multiple calls to iterator adapters to perform complex actions in a readable way, since iterators are lazy, have to call one of the consuming adapter methods to get results from calls to iterator adaptors
+
+### Using Closures That Capture Their Environment
+- Many iterator adapters take closures as arguments, and commonly the closures specified as arguments to iterator adapters will be closures that capture their environments
+- `filter` iterator adapter method takes a closure that gets an item from the iterator and returns a `bool`, if the closure returns `true`, the value will be included in the iteration provided by `filter`, if the closure returns `false`, the value won't be included, if the closure returns `true`, the value will be included in the iteration provided by `filter`, if the closure returns `false`, the value won't be included
+- Example: ```
+fn shoes_in_size(shoes: Vec<Shoe>, shoe_size: u32) -> Vec<Shoe> {
+    shoes.into_iter().filter(|s| s.size == shoe_size).collect()
+}```
+    - `filter` is used with a closure that captures the `shoe_size`variable from its environment to iterate over a collection of `Shoe` struct instances, it will only return shoes that are the specified size
+    - The `shoes_in_size` function takes ownership of a vector of shoes and a shoe size as parameters, it returns a vector containing only shoes of the specified size, in teh body of `shoes_in_size`, `filter` is called to adapt that iterator into a new iterator that only contains elements for which the closure returns true, the closure captures the `shoe_size` parameter from the environment, keeping only shoes of the size specified, finally calling `collect` gathers the values returned by the adapted iterator into a vector that's returned by the function
+
+## Improving the I/O Project
+- Example: ```
+    pub fn build(
+        mut args: impl Iterator<Item = String>,
+    ) -> Result<Config, &'static str> {```
+- The standard library documentation for the `env::args` function shows that the type of the iterator it returns is `std::env::Args` and that type implements the `Iterator` trait and returns `String` values
+- Have updated the signature of the `Config::build` function so the parameter `args` has a generic type with the trait bounds `impl Iterator<Item = String>` instead of `&[String]`, this usage of the `impl Trait` syntax means that `args` can be any type that implements the `Iterator` trait and returns `String` items
+- Since ownership of `args` is being taken and `args` will be mutated by iterating over it, can add the `mut` keyword into the specification of the `args` parameter to make it mutable
+
+### Using `Iterator` Trait Methods Instead of Indexing
+- Example: ```
+args.next();
+
+let query = match args.next() {
+    Some(arg) => arg,
+    None => return Err("Missing query string");
+}
+
+let file_path = match args.next() {
+    Some(arg) => arg,
+    None => return Err("Missing file_path string");
+}```
+- Can call the `next` method since `args` implements the `Iterator` trait
+- First value in the return value of `env::args` is the name of the program which is ignored and moves onto the next value, first call `next` and do nothing with the return value, then call `next` to get the value and put in the `query` field of `Config`, if `next` returns `Some`, a match is used to extract the value, if it returns `None`, not enough arguments were given and this returns early with an `Err` value, the same thing is done for `file_path` value
+
+### Making Code Clearer with Iterator Adapters
+- Can take advantage of iterators in the `search` function
+- Can write code in a more concise way using iterator adapter methods, also avoids having a mutable intermediate `results` vector
+- Functional programming style prefers to minimize amount of mutable state to make code clearer, removing the mutable state might enable a future enhancement to make searching happen in parallel, since no need to manage concurrent access to the `results` vector
+- Example: ```
+fn search<'a>(query: &str, contents: &'a str) -> Vec<&'a str> {
+    contents()
+        .lines()
+        .filter(|line| line.contains(query))
+        .collect()
+}```
+- Purpose of the `search` function is to return all lines in `contents` that contain the `query`, this code uses the `filter` adapter to keep only the lines for which `line.contains(query)` reutrns `true` for, then collect the matching lines into another vector with `collect`
+
+### Choosing Between Loops or Iterators
+- Instead of messing around with various bits of looping and building new vectors, code focuses on the high-level objective of the loop, abstracting away some of the commonplace code making it easier to see concepts unique to some code, such as the filtering condition each element in the iterator must pass
+- Iterators get compiled down to roughly the same code as if writing the lower level code, iterators are a zero-cost abstraction, by which using the abstraction imposes no additional runtime overhead

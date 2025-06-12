@@ -1,6 +1,12 @@
 use std::thread;
 use std::time;
 
+#[derive(Debug)]
+struct Rectangle {
+    width: u32,
+    height: u32,
+}
+
 #[derive(Debug, PartialEq, Copy, Clone)]
 enum ShirtColor {
     Red,
@@ -67,6 +73,31 @@ fn main() {
     //
     //let s = example_closure(String::from("hello"));
     //let n = example_closure(5);
+
+    let list = vec![1, 2, 3];
+    println!("before defining closure: {list:?}");
+
+    //let only_borrows = || println!("{list:?}");
+    //let mut borrows_mutably = || list.push(1);
+    //
+    //borrows_mutably();
+
+    thread::spawn(move || println!("from thread {list:?}"))
+        .join()
+        .unwrap();
+
+    let mut list = [
+        Rectangle {width: 10, height: 1},
+        Rectangle {width: 19, height: 1},
+        Rectangle {width: 0, height: 1},
+    ];
+
+    let mut num_sort_operations = 0;
+    list.sort_by_key(|r| { 
+        num_sort_operations += 1;
+        r.width 
+    });
+    println!("{list:#?}, sorted in {num_sort_operations}");
 }
 
 fn add_one_v1(x: u32) -> u32 { x + 1 }

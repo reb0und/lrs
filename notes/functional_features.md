@@ -51,3 +51,26 @@ let n = example_closure(5);```
 - The first time `example_closure` is called with the `String` value, the compiler infers the type of `x` and the return type of the closure to be `String`, these types are then locked into the closure in `example_closure` and a type error is received when attempting to use a different type with the same closure
 
 ### Capturing References of Moving Ownership
+- Closures can capture values from their environment in three ways, which directly map to the three ways a function can take a parameter: borrowing immutably, borrowing mutably, and taking ownership, the closure will decide which of these to use based on what the body of the function does with the captured values
+- Example: `let only_borrows = || println!("from closure: {list:?}");`
+- This closure captures an immutable reference to the vector named `list` because it only needs an immutable reference to print the value
+- This also indicates that a variable can bind to a closure definition and a closure can later be called by using the variable name and parentheses as if the variable name were a function name 
+- Since there can be multiple immutable references to `list` at the same time, `list` is still accessible from the code before the closure definition, after the closure definition but before the closure is called, and after the closure is called
+- Example: `let mut borrows_mutably = || list.push(1);`
+- Closure body is changed so that it adds an element to the `list` vector, the closure now captures a mutable reference
+- Can no longer have a `println!` between the definition and the call of the `borrows_mutably` closure, when `borrows_mutably` is defined, it captures a mutable reference to `list`, the closure is not used again after it is called so the mutable borrow ends
+   - Between the closure definition and the closure call, an immutable borrow to print isn't allowed because no other borrows are allowed when there's a mutable borrow
+- To force the closure to take ownership of the values it uses in the environment even through the body of the closure doesn't strictly need ownership, can use the `move` keyowrd before the parameter list
+- Example: ```
+    thread::spawn(move || println!("from thread {list:?}"))
+        .join()
+        .unwrap();```
+- This is mostly useful when passing a closure to a new thread to move the data so that it's owned by the new thread
+- Here a thread is spawned, giving the thread a closure to run as an argument, the closure body prints out the list
+   - Previously, the closure only captured `list` using an immutable reference because that's the least amount of access to `list` needed to print it 
+   - In this example, despite only needing an immutable reference, need to specify that `list` should be moved into the closure by putting the `move` keyword at the beginning of the closure definition, the new thread might finish before the rest of the main thread finishes of the main thread might finish first
+   - If the main thread maintained ownership of `list` but ended before the new thread did and dropped `list`, the immutable reference in the thread would be invalid, therefore the compiler requires that `list` be moved into the closure given to the new thread so the reference will be valid
+
+
+### Moving Captured Values out of Closures and the `Fn` Traits
+- 

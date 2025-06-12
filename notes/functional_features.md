@@ -73,4 +73,53 @@ let n = example_closure(5);```
 
 
 ### Moving Captured Values out of Closures and the `Fn` Traits
-- 
+- Once a closure has captured a reference or captured ownership of a value from the environment where the closure is defined (affecting what is moved into the closure), the code in the body of the closure defines what happens to the references or values when the closure is evaluated later (affecting what is moved out of the closure, a closure body can do any of the following:
+   - Move a captured value out of the closure
+   - Mutate the captured value
+   - Neither move nor mutate the value
+   - Capture nothing from the environment to begin with
+- The way a closure captures and handles values from the environment affects which traits the closure implements, and the traits are how functions and structs can specify what kinds of closures can be used
+- Closures will automatically implement one, two, or all three of these `Fn` traits, in an additive manner, depending on how the closure's body handles the values
+1. `FnOnce` applies to closures that can be called once. All closures implement at least this trait because all closures can be called. A closure that moves captured values out of its body will only implement `FnOnce` and none of the other `Fn` traits because it can only be called once
+2. `FnMut` applies to closures that don't move captured values out of their body, but that might mutate the captured values. These closures can be called more than once.
+3. `Fn` applies to closures that don't move captured values out of their body and don't mutate captured values, as well as closures that capture nothing from their environment, these closures can be called more than once without mutating the environment, important in cases such as calling a closure multiple times concurrently
+- Example: ```impl<T> Option<T> {
+    pub fn unwrap_or_else<F>(self, f: F) -> T
+    where
+        F: FnOnce() -> T
+    {
+        match self {
+            Some(x) => x,
+            None => f(),
+        }
+    }
+}```
+- `T` is the generic type representing the type of the value in the `Some` variant of an `Optipn`, that type `T` is also the return type of the `unwrap_or_else` function, code that calls `unwrap_or_else` on an `Option<String>` will get a `String`
+- The `unwrap_or_else` function has the additional generic type parameter `F`, the `F` type is the type of the parameter named `f` which is the closure provided when calling `unwrap_or_else`
+- The trait bound specified on generic type `F` is `FnOnce() -> T`, meaning `F` must be able to be called once, take no arguments, and return a `T`, using `FnOnce` in the trait bound expresses the constraint that `unwrap_or_else` is going to call `f` at most one time, in the body of `unwrap_or_else`, can see that if the `Option` is `Some`, `f` won't be called, if the `Option` is `None`, `f` will be called once, since all closures implement `FnOnce`, `unwrap_or_else` accepts all three kinds of closures and is as flexible as it can be
+- When not wanting to require capturing a value from the environment, can use the name of a function rather than a closure, example being `unwrap_or_else(Vec::new)` on an `Option<Vec<T>>` value to get a new empty vector if the value is `None`, the compiler automatically implements whichever of the `Fn` traits is applicable for a function definition
+- Standard library method `sort_by_key` defined on slices differs from `unwrap_or_else` by using `FnMut` instead of `FnOnce` for the trait bound 
+- Example `list.sort_by_key(|r| r.width);`
+- The closure gets one argument in the form of a reference to the current item the slice being considered and returns a value of type `K` that can be ordered, this function is useful for sorting a slice by a particular attribute of each item
+- The reason `sort_by_key` is defined to take an `FnMut` closure is that it calls the closure multiple times: once for each item in the slice, the closure `|r| r.width` doesn't capture, mutate, or move out anything from its environment, so it meets the trait bound requirements
+- Example: 
+```let mut sort_operations = vec![];
+    let value = String::from("closure called");
+
+    list.sort_by_key(|r| {
+        sort_operations.push(value);
+        r.width
+    });
+    println!("{list:#?}");```
+- This is an example of a closure that implements just the `FnOnce` trait since it moves a value out of the environmentm the compiler won't allow this closure with `sort_by_key`
+- This is a poor attempt to try and count the number of times `sort_by_key` calls the closure when sorting `list`, this attempts to do so by pushing `value` (a `String` from the closure's environment) into the `sort_operations` vector, the closure captures `value` and then moves `value` out of the closure by transferring ownership of `value` to the `sort_operations` vector, this closure can be called once, trying to call it a second time wouldn't work because `value` would no longer be in the environment to be pushed into `sort_operations` again, therefore this closure only implements `FnOnce`, trying to compile this code would result in an error that `value` can't be moved out of the closure since the closure must implement `FnMut`
+- Error points to line in closure body that moves `value` out of the environment, to fix, need to change the closure body so that it doesn't move values out of the environment and incrementing its value 
+- Example:
+```
+    let mut num_sort_operations = 0;
+    list.sort_by_key(|r| { 
+        num_sort_operations += 1;
+        r.width 
+    });```
+- This is an alternative approach to count the number of times the closure is called, this closure works with `sort_by_key` because it is only capturing a mutable reference to the `num_sort_operations` counter and can therefore be called more than once
+- `Fn` traits are important when defining or using functions or types that make use of closures

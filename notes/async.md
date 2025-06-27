@@ -46,9 +46,29 @@ async fn page_title(url: &str) -> Option<String> {
         .select_first("title")
         .map(|title_element| title_element.inner_html())
 }```
-- First, 
-- Async allows concurrent code that is non blocking, to be written in a blocking manner
-- Futures are values that are incomplete and will be ready in the future, `Future` is a trait that has many different implementations
-- Code blocks or functions can be annotated with `async` to indicate they can be paused and resumed
-- Within `async` blocks and functions, can use the `await` keyword to await a future (wait for the future to become ready)
-- Any point where a future is awaited within an async block or function is a potential spot for the async block or function to pause and resume, the process of checking whether the value is ready is called polling
+   - This defines a function `page_title` and marks it with the `async` keyword, then uses the `trpl::get` function to fetch whatever URL is passed in and adds the `await` keyword to await the response
+   - To get the text of the response, the `text` method is called and is awaited with the `await` keyword
+      - Both of these steps are asynchronous, for `get` function, need to wait for server to send back the first part of its response, including HTTP headers, cookies, etc and can be delivered separately of the response body
+      - Especially if body is large, can take some time for text to arrive, must wait for entirety of response to arrive so `text` method is also async
+- Must explicitly await both futures, since futures in Rust are lazy, they don't do anything until `await` keyword is used (Rust will show a compiler warning if a future is not used)
+   - Similar to iterators in the sense that they do nothing until the `next` method is called (whether directly or by using `for` loops or methods such as `map` that use `next` under the hood)
+   - Futures do nothing unless prompted, this laziness allows Rust to avoid running async code until its actually needed
+- This is different from the behavior observed when using `thread::spawn`, where the closure passed to another thread starts running immediately, also different from how many other languages approach async, important for Rust to be able to provide its performance guarantees just as it is with iterators
+- Once given the `response_text`, can parse it into an instance of the `Html` type using `Html::parse`, instead of a raw string, have a data type to use to work with the HTML as a richer data structure
+- Can use the `select_first` method to find the first instance of a given CSS selector, by passing the string `"title"`, can get the first `<title>` element in the document if there is one, since there may not be any matching element, `select_first` returns an `Option<ElementRef>`, finally, can use the `Option::map` method, which allows work with the item in the `Option` if it's present, and do nothing if it isn't (would also use a `match` expression here but `map` is more idiomatic to get its content, which is a `String`), when all is done, result is an `Option<String>`
+- Rust's `await` keyword goes after the expression being awaited, not before it, it's a postfix keyword, this makes chains of methods much nicer to work with, as a result, can change the body of `page_title` to chain the `trpl::get` and `text` function calls together with `await` between them
+- Example: `let response_text = trpl::get(url).await.text().await;`
+- When Rust sees a block with the `async` keyword, it compiles into a unique, anonymous data type that implements the `Future` trait, when Rust sees a function marked with `async`, it compiles into a non-async function whose body is an async block, an async function's return type is the type of the anonymous data type that the compiler creates for that async block
+- Writing `async fn` is equivalent to writing a function that returns a future of the return type, to the compiler, a function definition such as the `async fn page_title` is equivalent to a non-async function defined like this: ```
+fn page_title(url: &str) -> impl Future<Output = Option<String>> {
+    async move {
+        let text = trpl::get(url).await.text().await;
+        Html::parse(&text)
+            .select_first("title")
+            .map(|title_element| title_element.inner_html())
+    }
+}```
+- This transformed function uses the `impl Trait` syntax, the returned type is a `Future` with an associated type of `Output`, the `Output` type is an `Option<String>`, this is the same as the original return type from the `async fn` version of `page_title`, all of the code in the body of the original function is wrapped in an `async move` block, blocks are expressions, the whole block is the expression returned from the function, this async block produces a value with the type `Option<String>`, that value matches the `Output` type in the return type, this is similar to other blocks previously seen, the new function body is an `async move` block because of how it uses the `url` parameter
+
+### Determining a Single Page's Title
+- 

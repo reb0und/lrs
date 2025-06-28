@@ -61,7 +61,7 @@ async fn page_title(url: &str) -> Option<String> {
 - When Rust sees a block with the `async` keyword, it compiles into a unique, anonymous data type that implements the `Future` trait, when Rust sees a function marked with `async`, it compiles into a non-async function whose body is an async block, an async function's return type is the type of the anonymous data type that the compiler creates for that async block
 - Writing `async fn` is equivalent to writing a function that returns a future of the return type, to the compiler, a function definition such as the `async fn page_title` is equivalent to a non-async function defined like this: ```
 fn page_title(url: &str) -> impl Future<Output = Option<String>> {
-    async move {
+    async {
         let text = trpl::get(url).await.text().await;
         Html::parse(&text)
             .select_first("title")
@@ -71,4 +71,92 @@ fn page_title(url: &str) -> impl Future<Output = Option<String>> {
 - This transformed function uses the `impl Trait` syntax, the returned type is a `Future` with an associated type of `Output`, the `Output` type is an `Option<String>`, this is the same as the original return type from the `async fn` version of `page_title`, all of the code in the body of the original function is wrapped in an `async move` block, blocks are expressions, the whole block is the expression returned from the function, this async block produces a value with the type `Option<String>`, that value matches the `Output` type in the return type, this is similar to other blocks previously seen, the new function body is an `async move` block because of how it uses the `url` parameter
 
 ### Determining a Single Page's Title
-- 
+- Example: ```
+async fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let url = &args[1];
+    match page_title(url).await {
+        Some(title) => println!("title for {url} is {title}"),
+        None => println!("{url} had no title"),
+    }
+}```
+- This gets the title for a single page, first passes the first URL `page_title` and await the result, since the value produced by the future is an `Option<String>`, need to use a `match` expression to print different messages to account for whether the page had a `<title>`
+- Unfortunately, this code won't compile since `await` keywords can only be used in async functions and blocks but Rust won't allow the `main` function to be marked as async
+- `main` cannot be marked as `async` because the async code needs a runtime: a Rust crate that manages the details of executing asyncrhonous code, a program's `main` function can initialize a runtime but it is not a runtime itself, every Rust program that executes async code has at least one place where it sets up a runtime and executes the futures
+- Most languages that support async bundle a runtime, but Rust does not, instead there are many different async runtimes available, each of which make different tradeoffs suitable to the usecae it targets
+   - A high-throughput web server has very different needs than a microcontroller with a single core, little RAM, and nok heap allocation ability
+   - The crates that provide those runtimes also often supply async versions of common functionality such as file or network I/O
+- Can use the `run` function from the `trpl` crate which takes a future as an argument and runs it to completion, behind the scenes, calling `run` sets up a runtime that's used to run the future passed in, once the future completes, `run` returns whatever the value the future produced
+- Could pass the future returned by `page_title` directly to `run`, once complete, could match on the resulting `Option<String>`
+- Example: ```
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+
+    trpl::run(async move {
+        let url = &args[1];
+        match page_title(url).await {
+            Some(title) => println!("title for {url} is {title}"),
+            None => println!("{url} had no title"),
+        }
+    })
+}```
+- Each await point, every place where the code uses the `await` keyword, represents a place where control is handed back to the runtime, to make this work Rust needs to keep track of the state involved in the async block so that the runtime can execute some other work and then come back when it's ready to try advancing the first one again, this is a state machine
+- An enum to save the current state at each await point: ```
+enum PageTitleFuture<'a> {
+   Initial { url: &'a str },
+   GetAwaitPoint { url: &'a str },
+   TextAwaitPoint { response: trpl::Response },
+}```
+- Writing code to transition between each state by hand would be tedious and error-prone, however, when needing to add more functionality and more states to the code later,
+- The Rust compiler creates and manages the state machine data structures for async code automatically, normal borrowing and ownership rules around data structures all still apply, compiler also handles checking those
+- Something has to execute the state machine, which is a runtime (an eexecutor is a part of a runtime responsible for executing the async code)
+- If `main` were an async function, something else woul dneed to manage teh state machine for whatever future `main` returned, but `main` is the starting point for the program, instead, this calls the `trpl::run` function in `main` to set up a runtime and run the future returned by the `async` block until it is done
+- Some runtimes provide macros to write an async `main` function, those macros rewrite `async fn main { ... }` to be a normal `fn main` which calls a function that runts a future to completion the way `trpl::run` does
+
+### Racing the Two URLs Together
+- This calls `page_title` with two different URLs parsed in from the command line and races them
+- Example: ```
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+
+    trpl::run(async {
+        let url_1 = &args[1];
+        let url_2 = &args[2];
+
+        let title_fut_1 = page_title(url_1);
+        let title_fut_2 = page_title(url_2);
+
+        let (url, maybe_title) =
+            match trpl::race(title_fut_1, title_fut_2).await {
+                Either::Left(left) => left,
+                Either::Right(right) => right,
+            };
+
+        println!("{url} finished first");
+
+        match maybe_title {
+            Some(title) => println!("title for {url} is {title}"),
+            None => println!("{url} had no title"),
+        }
+    })
+}
+
+async fn page_title(url: &str) -> (&str, Option<String>) {
+    let response_text = trpl::get(url).await.text().await;
+    let title = Html::parse(&response_text)
+        .select_first("title")
+        .map(|title_element| title_element.inner_html());
+
+    (url, title)
+}```
+- This begins by calling `page_title` for each of the user supplied URLs, the resulting futures are saved as `title_fut_1` and `title_fut_2`, these futures are lazy and don't do anything until awaited, the futures are passed to `trpl::race` which returns a value to indicate which of the futures passed to it finishes first
+- Under the hood, `race` is built on a more general function, `select`, which is encountered in real-world Rust code
+   - A `select` function can do a lot of things that the `trpl::race` function can't, but has some added complexity that can be skipped over for now
+- Either future can legitimately "win", so it does not make sense to return a `Result`, instead `race` returns `trpl::Either`, the `Either` type is somewhat similar to a `Result` in that it has two cases, but there is no notion of success or failure baked into `Either`, instead it uses `Left` and `Right` to indicate one or the other
+- Example: ```
+enum Either<A, B> {
+   Left(A),
+   Right(B),
+}
+- The `race` function returns `left` with output from the first future argument if it finishes first, or `Right` with the output of the second furture argument if that one finishes first, this matches the order the arguments appear in when calling the function, the first argument is to the left of the second argument
+- `page_tile` is called with the same URL passed in, this way, the if the page returns first does not have a `<title>` to resolve, a meaningful message can still be printed, `println!` is updated to indicate which URL finished first and what, if any, the `<title>` is for the web page at that URL

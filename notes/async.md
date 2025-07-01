@@ -160,3 +160,30 @@ enum Either<A, B> {
 }
 - The `race` function returns `left` with output from the first future argument if it finishes first, or `Right` with the output of the second furture argument if that one finishes first, this matches the order the arguments appear in when calling the function, the first argument is to the left of the second argument
 - `page_tile` is called with the same URL passed in, this way, the if the page returns first does not have a `<title>` to resolve, a meaningful message can still be printed, `println!` is updated to indicate which URL finished first and what, if any, the `<title>` is for the web page at that URL
+
+## Applying Concurrency to Async
+- Applying async to some concurrency challenges, differences between threads and futures
+- In many cases, the APIs for working with concurrency using async are very similar to those for threads, in other cases they end up being quite different, even when the APIs look similar between threads and async, they often have different behaviora, nearly always have different performance characteristics
+
+### Creating a New Task With `spawn_task`
+- Counting to two on separate threads using async
+- The `trpl` crate supplies a `spawn_task` function that is similar to the `thread::spawn` API and a `sleep` function that is an async version of the `thread::sleep` API
+- Example: ```
+use std::time::Duration;
+
+fn main() {
+    trpl::run(async {
+        trpl::spawn_task(async {
+            for i in 1..10 {
+                println!("number {i} from the first task");
+                trpl::sleep(Duration::from_millis(500)).await;       
+            }
+        });
+
+        for i in 1..5 {
+            println!("number {i} from the second task");
+            trpl::sleep(Duration::from_millis(500)).await;       
+        }
+    });
+}```
+- 

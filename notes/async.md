@@ -37,7 +37,7 @@
 - Building a command tool to fetch two web pages, pull the `<title>` element from each, and print out the title of whichever page finishes that process first
 
 ### Defining the page_title function
-- Writing a function that takes one page URL as a parameter, makes a request to it, and returns teh text of the title element
+- Writing a function that takes one page URL as a parameter, makes a request to it, and returns the text of the title element
 - Example: ```
 async fn page_title(url: &str) -> Option<String> {
     let response = trpl::get(url).await;
@@ -110,7 +110,7 @@ enum PageTitleFuture<'a> {
 - Writing code to transition between each state by hand would be tedious and error-prone, however, when needing to add more functionality and more states to the code later,
 - The Rust compiler creates and manages the state machine data structures for async code automatically, normal borrowing and ownership rules around data structures all still apply, compiler also handles checking those
 - Something has to execute the state machine, which is a runtime (an eexecutor is a part of a runtime responsible for executing the async code)
-- If `main` were an async function, something else woul dneed to manage teh state machine for whatever future `main` returned, but `main` is the starting point for the program, instead, this calls the `trpl::run` function in `main` to set up a runtime and run the future returned by the `async` block until it is done
+- If `main` were an async function, something else woul dneed to manage the state machine for whatever future `main` returned, but `main` is the starting point for the program, instead, this calls the `trpl::run` function in `main` to set up a runtime and run the future returned by the `async` block until it is done
 - Some runtimes provide macros to write an async `main` function, those macros rewrite `async fn main { ... }` to be a normal `fn main` which calls a function that runts a future to completion the way `trpl::run` does
 
 ### Racing the Two URLs Together
@@ -186,4 +186,771 @@ fn main() {
         }
     });
 }```
-- 
+- Main function has `trpl::run` so that top level function can be async 
+- Then, there are two loops within the block, each containing a `trpl::sleep` call which waits for 500 ms before sending the next message, one loop is placed in the body of a `trpl::spawn_task` and the other in a top-level `for` loop, an `await` is added after the `sleep` calls since they are futures
+- Code behaves similarly to thread-based implementation, including the fact that may see messages appear in a different order in terminal when running 
+- This version stops as soon as the `for` loop in the body of the main async block finishes, because the task spawned by `spawn_task` is shut down when the `main` function ends, to run all the way to task's completion, need to use a join handle to wait for the first task to complete
+   - With threads can use the `join` method to block until the thread is done running, but with async, can use the `await` method to do the same thing, since the task handle itself is a future, its output type is a `Result`, need to unwrap after awaiting it
+- Example: ```
+fn main() {
+    trpl::run(async {
+        let handle = trpl::spawn_task(async {
+            for i in 1..10 {
+                println!("{i} from spawned task");
+                trpl::sleep(Duration::from_millis(500)).await;
+            }
+        });
+
+        for i in 1..5 {
+            println!("{i} from main thread");
+            trpl::sleep(Duration::from_millis(500)).await;
+        }
+
+        handle.await.unwrap();
+    });
+}```
+- This will run until both loops finish
+- So far, async and threads give same basic outcomes with different syntax, using `await` instead of calling `join` on the join handle, and awaiting the `sleep` calls
+   - Bigger difference is that there was no need to spawn another operating system thread to do this, in fact don't need to spawn a task here, since async blocks compile to anonymous futures, can put each loop in an async block and have the runtime run them both to completion using the `trpl::join` function
+   - Previously, used the `join` method on the `JoinHandle` type returned by calling `std::thread::spawn`, the `trpl::join` function is similar, but for futures
+      - When given two futures, it produces a single new future whose output is a tuple containing the output of each future passed in once they both complete
+      - `trpl::join` can be used to wait for both `fut1` and `fut2` to finish, `fut1` and `fut2` are not awaited but instead, the new future produced by `trpl::join` is awaited
+      - The output is ignored since it's just a tuple containing two unit values
+      - Example: ```
+fn main() {
+    trpl::run(async {
+        let fut1 = async {
+            for i in 1..10 {
+                println!("{i} from spawned task");
+                trpl::sleep(Duration::from_millis(500)).await;
+            }
+        };
+
+        let fut2 = async {
+            for i in 1..5 {
+                println!("{i} from main thread");
+                trpl::sleep(Duration::from_millis(500)).await;
+            }
+        };
+
+        trpl::join(fut1, fut2).await;
+    });
+}```
+- Now will see the same order every time, which is different from with threads, since the `trpl::join` function is fair, meaning it checks each future equally often, alternating between them, and never lets one race ahead if the other is ready, with threads, the operating system bdecies which thread to check and how long to let it run, with async Rust, the runtime decies which task to check
+   - In practice, the details get complicated because an async runtime might use operating system threads under the hood as part of how  it manages concurrency, guaranteeing fairness can be more work for a runtime but it's still possible
+   - Runtimes don't have to guarantee fairness for any given operation and they often offer differnet APIs to choose whether or not to provide fairness
+
+#### Counting Up on Two Tasks Using Message Passing
+- Sharing data between futures will also be familiar, will use message passing again, but this time with async versions of the types and functions
+- Example: ```
+fn main() {
+    trpl::run(async {
+        let (tx, mut rx) = trpl::channel();
+
+        let val = String::from("hi");
+        tx.send(val).unwrap();
+
+        let received = rx.recv().await.unwrap();
+        println!("got {received}");
+    });
+}```
+- Single async block used, not spawning a separate task like a separate thread
+- Here, used `trpl::channel`, an async version of the multiple-producer, single-consumer channel API used with threads previously
+- The async version of the API is only a little different from the thread-based version, it uses a mutable rather than an immutable receiver, `rx` and its `recv` method produces a future to await rather than producing the value directly, now can send messages from the sender to the receiver, don't have to spawn a separate thread of reven a task, only need to await the `rx.recv` call
+- The syncrhonous `Receiver::recv` method in `std::mspc::channel` blocks until it receives a message, the `trpl::Recevier::recv` method does not, since it is async, instead of blocking, it hands control back to the runtime until either a message is received or the send side of the channel closes
+- Don't need to await the `send` call because it doesn't block, it doesn't need to since the channel it sends to is unbounded
+- Since all async code runs in an async block in a `trpl::run` call, everything with in it can avoid blocking, however the code outside it will block on the `run` function returning
+   - The `trpl::run` function allows the choice of where to block on some set of async code and thus where to transition between sync and async code, in most async runtimes, `run` is actually named `block_on` for exactly this reason
+- In this example, the message will arrive right away, although a future could be sued, here, there is no concurrency yet, everything happens in sequence, just as if there were no futures involved
+- Example: ```
+use std::time::Duration;
+
+fn main() {
+    trpl::run(async {
+        let (tx, mut rx) = trpl::channel();
+
+        let vals = vec![
+            String::from("hi"),
+            String::from("a"),
+            String::from("abc"),
+        ];
+
+        for val in vals {
+            tx.send(val).unwrap();
+            trpl::sleep(Duration::from_millis(500)).await;
+        }
+
+        while let Some(value) = rx.recv().await {
+            println!("got {value}");
+        }
+    });
+}```
+- This sends a series of messages and sleeps in between them
+- Along with sending the messags, need to receive them, in this case, since it is known how many messages are coming in, could to this manually by calling `rx.recv().await` four times, but would be unknown num ber in the real world, need to keep waiting until it is determined that there are no more messages
+- A `for` loop is used to process all the items received from a syncrhonous channel, Rust doesn't have a way to loop over an asyncrhonous series of items, need to use a `while let` conditional loop, this is the loop version of the `if let` construct, the loop will continue executing as long as the pattern it specifies continues to match the value
+- The `rx.recv` call produces a future, which is awaited, the runtime will pause the future until it is ready, once a message arrives, the future will resolve to `Some(message)`, as many times as a message arrives, when the channel closes, regardless of whether any messages have arrived, the future will instead resolve to `None` to indicate there are no more values and thus should stop polling or awaiting
+- The `while let` loop pulls all of this together, if the result of calling `rx.recv().await` is `Some(message)`, gain access to the message and can use it in the loop body, just as done with `if let`, if the result is `None`, the loop ends, each time the loop completes, it hits the await point again, so the runtime pauses it again until another message arrives
+- The code now successfully sends and receives all of the messages, but there are still a couple of problems, messages do not arrive at half-second intervals, they arrive all at once, a few seconds after starting the program, other problem is the program never exits
+- To get desired behavior, need to put the `tx` and `rx` operations in their own async blocks, then the runtime can execute each of them separetly using `trpl::join`, once again, await the result of calling `trpl::join`, not the individual futures, if awaiting the individual futures in sequence, would just end up back in a sequential flow
+- Example: ```
+use std::time::Duration;
+
+fn main() {
+    trpl::run(async {
+        let (tx, mut rx) = trpl::channel();
+
+        let tx_fut = async {
+
+            let vals = vec![
+                String::from("hi"),
+                String::from("a"),
+                String::from("abc"),
+            ];
+
+            for val in vals {
+                tx.send(val).unwrap();
+                trpl::sleep(Duration::from_millis(500)).await;
+            }
+        };
+
+        let recv_fut = async {
+            while let Some(value) = rx.recv().await {
+                println!("got {value}");
+            }
+        };
+
+        trpl::join(tx_fut, recv_fut).await;
+    });
+}```
+- With updated code, messages get printed at 500 ms intervals rather than all in a rush after 2s
+- The program still never exits though, since the way the `while let` loop interats with `trpl::join`
+   - The future returned from `trpl::join` completes only once both futures passed to it have completed
+   - The `tx` future completes once it finishes sleeping after sending the last message in `vals`
+   - The `rx` future won't complete until the `while let` loop ends
+   - The `while let` loop won't end until awaiting `rx.recv` produces `None`
+   - Awaiting `rx.recv` will return `None` only once the other end of the channel is closed
+   - The channel will close only if called `rx.close` or when the sender side `tx` is dropped
+   - `rx.close` is not called anywhere and `tx` won't be dropped until the otuermost aysnc block passed to `trpl::run` ends
+   - The block can't end because it is blocked on `trpl::join` completing, which takes back to the top of this list
+   - Could manually close `rx` by calling `rx.close` somewhere, but that doesn't make much sense, stopping after handling some arbitrary number of messages would make the program shut down, could miss messages, need some other way to make sure that `tx` gets dropped before the end of the function
+- Right now, the async block that sends the messages only borrows `tx` because sending a message doesn't require ownership, but if `tx` could be moved into the async block, it would be dropped once that block ends, can use the `move` keyword with async blocks
+- Can change the block used to send messages from `async` to `async move`, this version of code will gracefully shut down after last message is sent and received
+- Example: ```
+        let tx_fut = async move {
+            let vals = vec![
+                String::from("hi"),
+                String::from("a"),
+                String::from("abc"),
+            ];
+
+            for val in vals {
+                tx.send(val).unwrap();
+                trpl::sleep(Duration::from_millis(500)).await;
+            }
+        };```
+- Since async channel is a multiple-producer channel, can call `clone` on `tx` to send messages from multiple futures
+- Example: ```
+use std::time::Duration;
+
+fn main() {
+    trpl::run(async {
+        let (tx, mut rx) = trpl::channel();
+
+        let tx1 = tx.clone();
+        let tx1_fut = async move {
+            let vals = vec![
+                String::from("hi"),
+                String::from("a"),
+                String::from("abc"),
+            ];
+
+            for val in vals {
+                tx1.send(val).unwrap();
+                trpl::sleep(Duration::from_millis(500)).await;
+            }
+        };
+
+        let recv_fut = async {
+            while let Some(value) = rx.recv().await {
+                println!("got {value}");
+            }
+        };
+
+        let tx_fut = async move {
+            let vals = vec![
+                String::from("a"),
+                String::from("b"),
+                String::from("c"),
+            ];
+
+            for val in vals {
+                tx.send(val).unwrap();
+                trpl::sleep(Duration::from_millis(1500)).await;
+            }
+        };
+
+        trpl::join3(tx1_fut, recv_fut, tx_fut).await;
+    });
+}```
+- First, `tx` is cloned, creating `tx1` outside the first async block,, `tx1` is moved into that block just as done before with `tx`, later, the original `tx` is moved into another async block, where more messages are sent on a slower delay, then the new async block is placed after the async block for receiver messages, this could go before it just as well, the key is the order in which the futures are awaited, not in which they're created
+- Both of the async blocks for sending messages need to be `async move` blocks so that both `tx` and `tx1` get dropped when those blocks finish, otherwise, will end up back in an infinite loop, then switch from `trpl::join` to `trpl::join3` to handle the additional future
+- Now all the messages are seen from both sending futures, and since the sending futures use slightly different delays, the messages are received at different intervals
+
+## Working with Any Number of Futures
+- There is a macro form of `join` to which an arbitrary number of arguments can be passed, it handles awaiting for the futures itself
+   - Example: `trpl::join!(tx1_fut, recv_fut, tx_fut);`
+- Mcaro form only works when the number of futures is known ahead of time
+- Pushing futures to a collection and then waiting on some or all of the futures to complete is a common pattern
+- To check all of the futures in some collection, need to iterate and join on all of them, the `trpl::join_all` function accepts any type that implements the `Iterator` trait
+- Example: ```
+let futures = vec![tx1_fut, recv_fut, tx_fut];
+trpl::join_all(futures);```
+- This code does not compile 
+- None of the async blocks return anything, each one produces a `Future<Output = ()>`, since `Future` is a trait though and the compiler creates a unqiue enum for each async block, can't put two different hand-written structs in a `Vec` and the same rule applies to the different enums generated by the compiler
+- To make this work, need to use trait objects that allow treating each of the anonymous functions produced by these types as the same type since all of them implement the future trait
+- There is another way to include multiple types in a `Vec`: using an enum to represent each type that can appear in the vector, can't do that here, no way to name the different types since they are anonymous, also the only reason a vector was used with `join_all` was to be able to work with a dynamic collection of futures where only care about the same output type
+- Can try to wrap each future in the `vec!` in a `Box::new`
+- Example: `let futures = vec![Box::new(tx1_fut), Box::new(recv_fut), Box::new(tx_fut)];`
+- This code still doesn't compile, will get the same error and new erorrs referring to the `Unpin` trait
+- Can fix the type errors on the `Box::new` calls by explicitly annotating the type of the `futures` variable 
+- Example: `let futures: Vec<Box<dyn Future<Output = ()>>> = vec![Box::new(tx1_fut), Box::new(recv_fut), Box::new(tx_fut)];`
+   - The innermost type is the future itself, need to explicitly note that the output of the future is the unit type `()` by writing `Future<Output = ()>`
+   - Then need to annotate the trait with `dyn` to mark it as dynamic
+   - The entire trait reference is wrapped in a `Box`
+   - Need to explicitly state that `futures` is a `Vec` containing these items
+- Now only get errors mentioning `Unpin`, async block does not implement the `Unpin` trait and suggests using `pin!` or `Box::pin` to resolve it, can follow compilers advice for now, importing `Pin` from `std::pin` and updating the type annotation for `futures` with a `Pin` wrapping each `Box`, can use `Box::pin` to pin the futures themselves
+- Example: `let futures: Vec<Pin<Box<dyn Future<Output = ()>>>> = vec![Box::pin(tx1_fut), Box::pin(recv_fut), Box::pin(tx_fut)];`
+- Using `Pin<Box<T>>` adds a small amount of overhead from putting these futures on the heap with `Box`, only doing that to get the types to line up, dont actually need the heap allocation, these futures are local to this particular function, `Pin` is a wrapper type, can get the benefit of having a single type in the `Vec`, the original reason for `Box`, without doing a heap allocation, can use `Pin` directly with each future, using the `std::pin::pin` macro
+- Must be explicit about the type of the pinned reference, otherwise, Rust will still not know to interpret these as dynamic trait objects, which is what they need to be in the `Vec`, therefore need to add `pin` to the list of imports from `std::pin`, can `pin!` each future when defining it and define `futures` as a `Vec` containing pinned mutable references to the dynamic future type
+- Example: ```
+use std::time::Duration;
+use std::pin::{Pin, pin};
+
+fn main() {
+    trpl::run(async {
+        let (tx, mut rx) = trpl::channel();
+
+        let tx1 = tx.clone();
+        let tx1_fut = pin!(async move {
+            let vals = vec![
+                String::from("hi"),
+                String::from("a"),
+                String::from("abc"),
+            ];
+
+            for val in vals {
+                tx1.send(val).unwrap();
+                trpl::sleep(Duration::from_millis(500)).await;
+            }
+        });
+
+        let rx_fut = pin!(async {
+            while let Some(value) = rx.recv().await {
+                println!("got {value}");
+            }
+        });
+
+        let tx_fut = pin!(async move {
+            let vals = vec![
+                String::from("a"),
+                String::from("b"),
+                String::from("c"),
+            ];
+
+            for val in vals {
+                tx.send(val).unwrap();
+                trpl::sleep(Duration::from_millis(1500)).await;
+            }
+        });
+
+        let futures: Vec<Pin<&mut dyn Future<Output = ()>>> =
+            vec![tx1_fut, rx_fut, tx_fut];
+
+        trpl::join_all(futures).await;
+    });
+}```
+- Need to mutably borrow future to take the future forward in state
+- May have different `Output` types, and in this case will need to use the `join!` macro since `join_all` requires that the same output type exists, can either work with a dynamic number of futures with `join_all` as long as they have the same type, or can deal with a set of number of futures with the `join` functions or the `join!` macro if they have different types
+
+### Racing Futures
+- When futures are joined with the `join` family of functions and macros, all of them must be finished before moving on, sometimes, only need some future from a set to finish before moving on, similar to racing one future against another
+- Example: ```
+use std::time::Duration;
+
+fn main() {
+    trpl::run(async {
+        let slow = async {
+            println!("slow started");
+            trpl::sleep(Duration::from_millis(500)).await;
+            println!("slow finished");
+        };
+
+        let fast = async {
+            println!("fast started");
+            trpl::sleep(Duration::from_millis(50)).await;
+            println!("fast ended"):
+        };
+
+        trpl::race(slow, fast).await;
+    });
+}```
+- Each future prints a message when it starts running, pauses for some amount of time by calling and awaiting `sleep`, then prints another message when it finishes, then both `slow` and `fast` are passed to `trpl::race` and wait for one of them to finish, can ignore the `Either` instace returned, since all of the interesting behavior happens in the body of the async blocks
+- If the order of the arguments to `race` are flipped, the order of the started messages changes, even though the `fast` future always completes first, this is because of the implementation of this particular `race` function is not fair, it always runs the futures in the arguments in the order in which they're passed, other implementations are fair and wil randomly choose which future to poll first, regardless of whether the implementation of race used is fair, one of the futures will run up to the first `await` in its body before another task can start
+- At each await point, Rust gives a runtime a chance to pause the task and swtich to another one if the future being awaited isn't ready, the inverse is also true, Rust only pauses async blocks and hands control back to a runtime at an await point, eveything between await points is synchronous
+- This means if a bunch of work is done in an async block without an await point, that future will block any other future from making process, this can be thought of as one future starving other futures, in some cases, this may not be a big deal, but if doing some kind of expensive setup or long-running work, or if there is a future that will keep doing some particular task indefinitely, need to think about when and where to hand control back to the runtime
+- If thwre are long-running blocking operations, async can be a useful tool for providing ways for different parts of the program to relate to each other
+
+### Yielding Control to the Runtime
+- Here is a slow function, uses `std::thread::sleep` instead of `trpl::sleep` so that calling `slow` will block the current thread for some number of ms, can use `slow` to stand in for real-world operations that are both long-running and blocking
+- Example: ```
+use std::time::Duration;
+use std::thread;
+
+fn main() {
+    trpl::run(async {
+        let a = async {
+            println!("a started");
+            slow("a", 20);
+            slow("a", 10);
+            slow("a", 20);
+            trpl::sleep(Duration::from_millis(50)).await;
+            println!("a finished");
+        };
+
+        let b = async {
+            println!("b started");
+            slow("b", 200);
+            slow("b", 100);
+            slow("b", 200);
+            trpl::sleep(Duration::from_millis(50)).await;
+            println!("b finished");
+        };
+
+        trpl::race(a, b).await;
+    });
+}
+
+fn slow(name: &str, ms: u64) {
+    thread::sleep(Duration::from_millis(ms));
+    println!("{name} ran for {ms}");
+}```
+- Each future only hands control back to tbe runtime after carrying out a bunch of slow operations
+- `race` still finishes as soon as `a` is done, there is no interleaving between the two futures
+- The `a` future does all of its work, until the `trpl::sleep` call is awaited, then the future `b` does all of its work until its own `trpl::sleep` call is awaited, and finally the `a` future completes, to allow both futures to make progress between their slow tasks, need await points to hand control back to the runtime, this means something can that can be awaited
+- This kind of handoff would happen if `trpl::sleep` was removed at the end of the `a` future, it would complete without the `b` future running at all, can use the `sleep` function as a starting point for letting operations switch off making progress
+- Example: `trpl::sleep(Duration::from_millis(1)).await;`
+- Adding the `trpl::sleep` calls with awit points between each call to`slow` makes the two futures' work interleaved
+- The `a` future still runs for a bit before handing off control to `b` because it calls `slow` before ever calling `trpl::sleep`, but after that the futures swap back and forth each time one of them hits an await point, could have done this after every call to `slow` but could break up the work in whatever way makes the most sense
+- Example: `trpl::yield_now().await;`
+- This is clearer about the actual intent and can be significantly faster than using `sleep` since timers such as the one used by `sleep` often have limits on how granular they can be, the version of `sleep` in use will always sleep for at least a millisecond, even if its passed a `Duration` of one nanosecond
+- Example: ```
+use std::time::{Instant, Duration};
+
+fn main() {
+    trpl::run(async {
+        let start = Instant::now();
+        async {
+            for _ in 1..1000 {
+                trpl::sleep(Duration::from_nanos(1)).await;
+            }
+        }.await;
+
+        let time = Instant::now() - start;
+        println!(
+            "sleep version finished after {} secs", 
+            time.as_secs_f32()
+        );
+
+        let start = Instant::now();
+        async {
+            for _ in 1..1000 {
+                trpl::yield_now().await;
+            }
+        }.await;
+        let time = Instant::now() - start;
+        println!("yield version finished in {}", time.as_secs_f32());
+    });
+}```
+- Here, all of the status printing is skipped, passing a one-nanosecond `Duration` to `trpl::sleep` and let each future run by itself with no switching between the futures, they run for 1000 iterations and see how long the future using `trpl::sleep` takes compared to the future using `trpl::yield_now`
+- This means that async can be useful for even compute-bound tasks, depending on what the program is doing, since it provides a useful tool for structuring the relationships between different parts of the program, this is a form of cooperative multitasking, each future has the power to determine when it hands over control via await points, each future therefore also has the responsibility to avoid blocking for too long, in some Rust-based embedded operating systems, this is the only kind of multitasking
+- In real-world code, won't usually be alternating function calls with await points on every single line, while yielding control this way is relatively inexpensive, it's not fre, in many cases, trying to break up a compute-bound task might make it significantly slower, sometimes is better for overall performance to let an operation block briefly, always  measure to see what code's actual performance bottlenecks are
+- The underlying dynamic is important to keep in mind, if seeing a lot of work happening in serial that should be happening concurrently
+
+### Building Custom Async Abstraction
+- Can also compose futures to create new patterns, for example, can build a `timeout` function with async building blocks alrady known, when done, the result will be another building block to use to create more async abstractions
+- Example: ```
+use std::time::Duration;
+
+fn main() {
+    trpl::run(async {
+        let slow = async {
+            trpl::sleep(Duration::from_millis(100)).await;
+            "done"
+        };
+
+        match timeout(slow, Duration::from_millis(10)).await {
+            Ok(message) => println!("succeeded with {message}"),
+            Err(duration) => {
+                println!("failed after {} seconds", duration.as_secs())
+            }
+        }
+    });
+}```
+- To implement this, need to consider the API for `timeout`:
+- Needs to be an async function to await it
+- First parameter should be a future to run, can make it generic to allow it to work with any future
+- Its second parameter should be the maximum time to wait, can use a `Duration` that will make it easy to pass along to `trpl::sleep`
+- Should return a `Result`, if the future completes successfully, the `Result` will be `Ok` with the value produced by the future, if the timeout elapses first, the `Result` will be `Err` with the duration that the timeout waited for
+- Example: ```
+async fn timeout<F: Future>(
+    future_to_try: F, 
+    max_time: Duration
+) -> Result<F::Output, Duration> {}```
+- Need to race the future passed in against the duration, can use `trpl::sleep` to make a timer future from the duration and use trpl::race to run the timer with the future the caller passes in
+- Also know that `race` is not fair, polling arguments in the order in which they are passed, thus, `future_to_try` is passed to `race` first so it gets a chance to complete even if `max_time` is a very short duration, if `future_to_try` finishes first, `race` will return `Left` with the output from `future_to_try`, if `timer` finishes first, `race` will return `Right` with the timer's output of `()`
+- Example: ```
+use std::time::Duration;
+use trpl::Either;
+
+fn main() {
+    trpl::run(async {
+        let slow = async {
+            trpl::sleep(Duration::from_millis(100)).await;
+            "done"
+        };
+
+        match timeout(slow, Duration::from_millis(10)).await {
+            Ok(message) => println!("succeeded with {message}"),
+            Err(duration) => {
+                println!("failed after {} seconds", duration.as_secs())
+            }
+        }
+    });
+}
+
+async fn timeout<F: Future>(
+    future_to_try: F, 
+    max_time: Duration
+) -> Result<F::Output, Duration> {
+    match trpl::race(future_to_try, trpl::sleep(max_time)).await {
+        Either::Left(output) => Ok(output),
+        Either::Right(_) => Err(max_time),
+    }
+}```
+- If the `future_to_try` succeeds and results in a `Left(output)`, return `Ok(Output)`, if the sleep timer elapses instead, receive a `Right(())`, igore the `()` with `_` and return `Err(max_time)` instead
+- With this, there is a working `timeout` built out of two other async helpers
+- Since futures compose with other futures, can build really powerful tools using smaller async building blocks, can use this same approach to combine timetouts with retires, and in turn use those with operations such as network calls
+- In practice, will usually work directly with `async` and `await`, and secondarily with functions and macros such as `join`, `join_all`, `race`, and so on, will only need to reach for `pin` now and again to use futures with those APIs
+- Have now seen a number of ways to work with multiple futures at the same time, next will look at how to work with multiple futures in a sequence over time with streams, also should consider:
+   - How could a `Vec` be used to process a group of futures in sequence instead, what are the tradeoffs of doing that?
+   - `futures::stream::FuturesUnordered` type from `futures` crate, how would this be different if using a `Vec`
+
+## Streams: Futures in Sequence
+- The async `recv` method produces a sequence of items over time, this is an instance of a much more general pttern known as a stream
+- There are two differences between iterators and the async channel receiver, the first difference is time: iterators are synchronous, while the channel receiver is asynchronous, second is the API, when working directly with `Iterator`, can call its syncrhonous `next` method, with the `trpl::Receiver` stream in particular, called an asynchronous `recv` method instead
+- Otherwise, these APIs feel very similar and that similarity isn't a coincidence, a stream is like an asyncrhonous form of iteration, whereas the `trpl::Receiver` specifically waits to receive messages, though, the general-purpose stream API is much broader, it provides the next item in the way `Iterator` does, but asynchronously
+- The similarlity between iterators and streams in Rust means can actually create a stream from any iterator, as with an iterator can work with a stream by callking its `next` method and then awaiting the output
+- Example: ```
+fn main() {
+    trpl::run(async {
+        let values = [1, 2, 3, 4, 5];
+        let iter = values.iter().map(|n| n * 2);
+        let mut stream = trpl::stream_from_iter(iter);
+
+        while let Some(value) = stream.next().await {
+            println!("the value was: {value}");
+        }
+    });
+}```
+- This is an array of numbers, converted to an iterator, the called `map` on to double all values, then iterator is converted into a stream using the `trpl::stream_from_iter` function, next this loops over the items in the stream as they arrive with the `while let` loop
+- This code does not compile, notes that there is no `next` method available, the reason for this compiler error is that the right trait is needed in scope to be able to use the `next` method, right trait may be expected to be `Stream` but is actually `StreamExt`, short for extension, `Ext` is a common pattern in the Rust community for extending one trait with another
+- `Stream` trait defines a low-level interface that effectively combines the `Iterator` and `Future` traits
+- `StreamExt` supplies a higher-level set of APIs on top of `Stream`, including the `next` method as well as other utility methods similar to those provided by the `Iterator` trait, `Stream` and `StreamExt` are not yet part of Rust's standard library but most ecosystem crates use the same definition
+- Can fix the compiler error by adding a `use` statement for `trpl::StreamExt`
+- Example: `use trpl::StreamExt;`
+- With all of those pieces together, this code works as expected, with with `StreamExt` in scope, can use all of its utility methods, just as with iterators, for example, can use the `filter` method to filter out everything but multiples of three and five
+- Example: ```
+use trpl::StreamExt;
+
+fn main() {
+    trpl::run(async {
+        let values = [1, 2, 3, 4, 5];
+        let iter = values.iter().map(|n| n * 2);
+        let mut stream = trpl::stream_from_iter(iter);
+
+        let mut filtered =
+            stream.filter(|value| value % 3 == 0 || value % 5 == 0);
+
+        while let Some(value) = filtered.next().await {
+            println!("the value was: {value}");
+        }
+    });
+}```
+- Could do the same with normal iterators and without any async at all
+
+### Composing Streams
+- Many concepts are naturally represented as streams: items becoming available in a queue, chunks of data being pulled incrementally from the filesystem when the full data set is too large for the computer's memory, or data arriving over the network over time
+- Since streams are futures, can use them with any kind of future and combine them in interesitng ways, for example, can batch up events to avoid triggering too many network calls, set timeouts on sequences of long-running operations, or throttle user interface events to avoid doing needless work
+- Can start by building a little stream out of messages as a stand-in for a stream of data seen from a websocket
+- Example: ```
+use trpl::{ReceiverStream, Stream, StreamExt};
+
+fn main() {
+    trpl::run(async {
+        let mut messages = get_messages();
+
+        while let Some(message) = messages.next().await {
+            println!("{message}");
+        }
+    });
+}
+
+fn get_messages() -> impl Stream<Item = String> {
+    let (tx, rx) = trpl::channel();
+
+    let messages = ["a", "b", "c", "d", "e"];
+    for message in messages {
+        tx.send(format!("message: {message}")).unwrap();
+    }
+    
+    ReceiverStream::new(rx)
+}```
+- Fist, a function called `get_messages` is created that returns `impl Stream<Item = String>`, for its implementation, can create an async channel, loop over the first 5 letters of the English alphabet, and send them across the channel
+- Can also use a new type `ReceiverStream` which converts the `rx` recevier from the `trpl::channel` into a `Stream` with a `next` method, in `main`, used a `while let` loop to print all the messages from the stream
+- Could do this with the regular `Receiver` API or even the regular `Iterator` API, though, a feature that requires streams could be adding a timeout that applies to every item in the stream
+- Example: ```
+use std::{pin::pin, time::Duration};
+use trpl::{ReceiverStream, Stream, StreamExt};
+
+fn main() {
+    trpl::run(async {
+        let mut messages = pin!(get_messages().timeout(Duration::from_millis(200)));
+
+        while let Some(result) = messages.next().await {
+            match result {
+                Ok(message) => println!("{message}"),
+                Err(reason) => println!("error: {reason}"),
+            }
+        }
+    })
+}```
+- Start by adding a timeout to the stream with the `timeout` method which comes from the `SreamExt` trait, then the body of the `while let` loop is updated, because the stream now returns a result, the `Ok` variant indicates a message arrived in time, the `Err` variant indicates that the timeout elapsed beforea any message arrived, the result is placed in a `match` statement and either print the message when received successfully or print a notice about the timeout, finally, the messages are pinned after applying the timeout to them, because the timeout helper produces a stream that needs to be pinned to be polled
+- Since there are no delays between messages, the timeout does not change the behavior of the program
+- Example: ```
+fn get_messages() -> impl Stream<Item = String> {
+    let (tx, rx) = trpl::channel();
+
+    trpl::spawn_task(async move {
+        let messages = ["a", "b", "c", "d", "e"];
+        for (index, message) in messages.into_iter().enumerate() {
+            let time_to_sleep = if index % 2 == 0 { 100 } else { 300 };
+            trpl::sleep(Duration::from_millis(time_to_sleep)).await;
+
+            tx.send(format!("message: {message}")).unwrap();
+        }
+    });
+
+    ReceiverStream::new(rx)
+}```
+- In get messages, used `enumerate` Iterator method with the `messages` array so that can get the index of each item sending along with the item itself, then applied a 100 ms delay to even-index items and a 300 ms delay to the odd index-items to simulate the different delays seen from a stream of messages in the real world, since the timeout is for 200 ms, this should affect half the messages
+- To sleep between messages in the `get_messages` function without blocking, need to use async, can't make `get_messages` itself into an async function, because then it would return a `Future<Output = Stream<Item = String>>`, instead of a `Stream<Item = String>>`, the caller would have to await `get_messages` itself to get access to the stream, note that everything in a given future happens linearly, concurrency happens between futures, awaiting `get_messages` would require it to send all the messages, including the sleep delay between each message before returning the receiver stream and as a result the timeout would be useless, there would be no delays in teh stream itself
+- Instead, `get_messages` is left as a regular function that returns a stream, and spawns a task to handle the async `sleep` calls
+- Calling `spawn_task` in this way works because the runtime has already been set up, otherwise, would result in a panic, other implementations choose different tradeoffs, they might spawn a new runtime and avoid the panic but end up with a bit of extra overhead, or they may not provide a standalone way to spawn tasks without reference to a runtime
+- The timeout doesn't prevent the messages from arriving in the end, still get all of the original messages, since hte channel is unbounded: it can hold as many messages as can fit into memory, if the message doesn't arrive before the timout, the stream handler will account for that but when it pools the stream again, it may now have arrived
+- Can get different behavior using other kinds of channels or other kinds of streams more generally, can combine a stream of time interals with this stream of messages
+
+### Merging Streams
+- Can create another stream, which will emit an item every ms if it is allowed to run directly, for simplicity, can use the `sleep` function to send a message on a delay and combine it with the same approach used in `get_messages` of creating a stream from a channel, the difference is that this time, need to send back the count of intervals that have elapsed, to the return type will be `impl Stream<Item = u32>`, can call the `get_intervals` function
+- Example: ```
+fn get_intervals() -> impl Stream<Item = u32> {
+    let (tx, rx) = trpl::channel();
+
+    trpl::spawn_task(async move {
+        let mut count = 0;
+        loop {
+            trpl::sleep(Duration::from_millis(1)).await;
+            count += 1;
+            tx.send(count).unwrap();
+        }
+    });
+
+    ReceiverStream::new(rx)
+}```
+- Will start by defining a `count` in the task, can define it outside the task, too, but it's clearer to limit the scope of any given variable, then creating an infinite loop, each iteration of the loop sychronously sleeps for one ms, increments the count, and then sends it over the channel, this is all wrapped in the task created by `spawn_task`, all, including the infinite loop, will get cleaned up along with the runtime
+- This kind of infinite loop, that ends only when the whole runtime gets torn down, is fairly common in async Rust, many programs need to keep running indefinitely, with async, this doesn't block anything else, as long as there is at least one await point in each iteration through the loop
+- Now, in main function's async block, can attempt to merge the `messages` and `intervals` streams
+- Example: ```
+        let messages = get_messages().timeout(Duration::from_millis(200));
+        let intervals = get_intervals();
+        let merged = messages.merge(intervals);```
+- Can start by calling `get_intervals`, then merge the `messages` and `intervals` streams with the `merge` method, which combines multiple streams into one stream that produces items from any of the source streams as soon as items are available, without imposing any particular ordering, the combined stream is looped over instead  of over `messages`
+- At this point, neither `messages` nor `intervals` needs to be pinned or mutable, despite this, the call to `merge` doesn't compile, neither does the `next` call in the `while let` loop, this is because the two streams have different types, the `messages` stream has the type `Timeout<impl Stream<Item = String>>`, where `Timeout` is the type that implements `Stream` for a timeout call, the `intervals` stream has the typle `impl Stream<Item = u32>`, to merge these two streams, need to transform one of them to match the other, can rework teh intervals stream because messages is already the basic format wanted and has to handle timeout errors
+- Example: ```
+        let messages = get_messages().timeout(Duration::from_millis(200));
+        let intervals = get_intervals()
+            .map(|count| format!("interval: {count}"))
+            .timeout(Duration::from_secs(10));
+        let merged = messages.merge(intervals);
+
+        let mut stream = pin!(merged);```
+- Can use the `map` helper method to transform the `intervals` into a string, second, need to match the `Timeout` from `messages`, don't actually want a timeout for `intervals`, can just create a timeout which is longer than the other durations used, here, can create a 10s timeout with `Duration::from_secs(10)`, finally, need to make `stream` mutable so that the `while let` loop's `next` calls can iterate through the stream and pin it so that it's safe to do so, that gets almost to desired position, first problem is that it never stops, second is that messages are buried in midst of interval counter
+- Example: ```
+        let messages = get_messages().timeout(Duration::from_millis(200));
+        let intervals = get_intervals()
+            .map(|count| format!("interval: {count}"))
+            .throttle(Duration::from_millis(100))
+            .timeout(Duration::from_secs(10));
+        let merged = messages.merge(intervals).take(20);
+        let mut stream = pin!(merged);```
+- First, can use the `throttle` method on the `intervals` stream so that it doesn't overwhelm the `messages` stream, throttling is a way of limiting the rate at which a function will be called, or, how often the stream will be polled, once every 100 ms should do (how often messages arrive)
+- To limit the number of items, will accept from stream the `take` method is aplied to the `merged` stream, to limit the final output, not just the one stream or the other
+- Now, when running the program, it stops after pulling 20 items from the stream, and the intervals don't overwhelm the messages, also don't get `Interval: 100` or `Interval: 200` or so on, instead get `Interval: 1`, `Interval: 2` and so on, despite having a source stream tha tcan produce an event every ms, this is because the `throttle` call produces a new stream that wraps the original stream so that the original stream gets polled only at the throttle rate, not its own "native" rate, don't have a bunch of unhandled interval messages that are chosen to be ignored, instead, they are never produced in the first place, this is the inherent "laziness" of Rust's futures at work again, allowing the selection of performance characteristics
+- Errors need to be handled, with both of these channel-based streams, the `send` calls could fail when the other side of the channel closes, that's just a matter of how the runtime executes the futures that make up the stream, up until now, this possibility has been ignored by calling `unwrap`, but in a well-behaved app, should explicitly handle the error, at minimum by ending the loop so no more messages are tried to be sent, can print the issue and then `break` from the loops
+- ```
+fn get_messages() -> impl Stream<Item = String> {
+    let (tx, rx) = trpl::channel();
+
+    trpl::spawn_task(async move {
+        let messages = ["a", "b", "c", "d", "e"];
+        for (index, message) in messages.into_iter().enumerate() {
+            let time_to_sleep = if index % 2 == 0 { 100 } else { 300 };
+            trpl::sleep(Duration::from_millis(time_to_sleep)).await;
+
+            if let Err(send_error) = tx.send(format!("message: {message}")) {
+                eprintln!("could not send interval {message}: {send_error}");
+                break;
+            }
+        }
+    });
+
+    ReceiverStream::new(rx)
+}
+
+fn get_intervals() -> impl Stream<Item = u32> {
+    let (tx, rx) = trpl::channel();
+
+    trpl::spawn_task(async move {
+        let mut count = 0;
+        loop {
+            trpl::sleep(Duration::from_millis(100)).await;
+            count += 1;
+            if let Err(send_error) = tx.send(count) {
+                eprintln!("could not send interval {count}: {send_error}");
+                break;
+            }
+        }
+    });
+
+    ReceiverStream::new(rx)
+}```
+- Correct way to handle a message send error will vary
+
+## A Closer Look at the Traits for Async
+-  `Future`, `Pin`, `Unpin`, `Stream`, and `StreamExt` traits have been used in various ways, need to understand more details regarding these
+
+### The `Future` Trait
+- Rust's definition of the `Future` trait:
+- Example: ```
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+pub trait Future {
+    type Output;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output>;
+}```
+- `Future`'s associated type `Output` says what the future resolves to, this is analogous to the `Item` associated type for the `Iterator` trait
+- `Future` also has the `poll` method which takes a special `Pin` reference for its `self` parameter and a mutable reference to a `Context` type and returns a `Poll<Self::Output>`
+- Example: ```
+enum Poll<T> {
+    Ready(T),
+    Pending,
+}```
+- This `Poll` type is similar to an `Option`, it has one variant and has a value, `Ready(T)` and one which does not, `Pending`, `Poll` means something quite different from `Option`, though the `Pending` variant indicates that the future has work to do, so the caller will need to check again later, the `Ready` variant indicates that the future has finished its work and the `T` value is available
+- With most futures, the caller should not call `poll` again after the future has returned `Ready`, many futures will panic if polled after becoming ready, Futures that are safe to poll again will explicitly say so in documentation, similar to how `Iterator::next` behaves
+- When there is code that uses `await`, Rust compiles it under the hood to code that calls `poll`
+- Rust compiles code that prints out page title for a single URL when it resolves into this:
+```
+match page_title(url).poll() {
+    Ready(page_title) => match page_title {
+        Some(title) => println!("title for {url} was {title}"),
+        None => println!("{url} had no title"),
+    },
+    Pending => {
+        // ?
+    }
+}```
+- What should be done when the future is still `Pending`, need some way to repeatedly try (loop)
+- Example: ```
+    loop {
+        match page_title(url).poll() {
+            Ready(page_title) => match page_title {
+                Some(title) => println!("title for {url} was {title}"),
+                None => println!("{url} had no title"),
+            },
+            Pending => {
+                // ?
+            }
+        }
+    }```
+- If Rust compiled to exactly this code, every `await` would be blocking, the opposite of the intention here, Rust makes sure that the loop can hand off control to something that can pause work on this future to work on other futures then check this one again later, that something is an async runtime, and this scheduling and coordination work is one of its main jobs
+- Earlier, described waiting on `rx.recv`, the `recv` call returns a future, and awaiting the future polls it, runtime will pause the future until it's ready with either `Some(message)` or `None` when the channel closes, can see how this works with `Future::poll`, the runtime knows the future isn't ready when it returns `Poll::Pending`, conversely, the runtime knows the future is ready and advances when `poll` returns `Poll::Ready(Some(message))` or `Poll(Ready(None))`
+- A runtime polls each future it is responsible for, putting the future back to sleep when it is not yet ready
+
+### The `Pin` and `Unpin` Traits
+- The `trpl::join_all` function returns a struct called `JoinAll`, that struct is a generic over a type `F`, whcih is constrained to implement the `Future` trait, directly awaiting a future with `await` pins the future implicitly, which is why `pin!` is not needed everywhere a future needs to be awaited
+- Not directly awaiting a future here, instead construct a new future, `JoinAll`, by passing a collection of futures to the `join_all` function, the signature for `join_all` requires that the types of the items in the collection all implement the `Future` trait, and `Box<T>` implements `Future` only if the `T` it wrapps is a future that implements the `Unpin` trait
+- The `cx` parameter in the `poll` method and its `Context` type are the key to how a runtime knows when to check any given future while still being lazy
+- A type annotation for `self` works like type annotations for other function parameters but with two key differences:
+    - It tells Rust what type `self` must be for the method to be called
+    - It can't just be any type, it's restricted to the type on which the method is implemented, a reference or smart pointer to that type, or a `Pin` wrapping a reference to that type
+- To poll a future to check whether it is `Pending` or `Ready(Output)`, need a `Pin` wrapped mutable reference to the type
+- `Pin` is a wrapper for the pointer-like types such as `&`, `&mut`, `Box`, `Rc`
+- `Pin` works with types that implement the `Deref` or `DerefMut` traits, but this is effectively equivalent to working only with pointers, `Pin` is not a pointer itself and does not have any behavior of its own like `Rc` and `Arc` do with reference counting, its purely a tool the compiler can use to enforce constraints on pointer usage
+- `await` is implemented in terms of calls to `poll`, but that was in terms of `Unpin` not `Pin`, how does `Pin` relate to `Unpin`, and why does `Future` need `self` to be in a `Pin` type to call `poll`?
+- Series of await points in a future get compiled into a state machine, and the compiler makes sure that the state machine follows all of `Rust's normal rules around safety, including borrowing and ownership, to make that work, Rust looks at what data is needed between one await point and either the next await point or the end of the async block, it then creates a corresponding variant in the compiled state machine, each variant gets the access it needs to the data that will be used in that section of the source code, whether by taking ownership of that data or by getting a mutable or immutable reference to it
+- If anything is wrong about the ownership of references in a given async block, the borrow checker will indicate this, to move around the future that corresponds to that block, such as moving it into a `Vec` to pass to `join_all` will complicate things
+- When moving a future (whether pushing it into a data structure to use as an iterator with `join_all` or returning it from what function), that actually means moving the state machine Rust creates, and unlike most other types in Rust, the futures Rust creates for async blocks can end up with references to themselves in the fields of any given variant
+- By default, any object that has a reference to itself is unsafe to move, because references always point to the actual memory address of whatever they refer to, if the data strucutre itself is moved, those internal references will be left pointing to the old location, however, that memory location is now invalid, its value will not be updated when making changes to the data structure, the computer is now free to reuse that memory for other purposes, coudl end up reading completely unrelated data later
+- The Rust compiler could try to update every reference to an object whether it gets moved, but that could add a lot of performance overhead, especially if a whole web of references needs updating, if the data structure in question could be made not to move in memory, wouldn't have to update any references, this is what Rust's borrow checker requires: in safe code, it prevents moving any item with an active reference to it
+- `Pin` builds on that to give the exact guarantee needed, when pinning a value by wrapping a pointer to that value in `Pin`, it can no longer move, with `Pin<Box<SomeType>>`, `SomeType` is pinned, not the `Box` pointer
+- The `Box` pointer can still move around freely, only care about making sure the data ultimately being referenced stays in place, if a pointer moves around, but the data it points to is in the same place, there is no problem
+- Most types are safe to move around, even if they are behind a `Pin` wrapper, only need to think about pinning with internal references, primitive values such as numbers or booleans are safe because they don't have any internal references, neither do most types in Rust, can move around a `Vec` without worrying, if there is a `Pin<Vec<String>>`, would have to do everything via the safe but restricive APIs provided by `Pin` even though `Vec<String>` is always safe to move if there are no other references to it, need a way to tell the compiler that it's fine to move items around in cases like this, which is where `Unpin` comes in
+- `Unpin` is a marker trait, similar to `Send` and `Sync` traits and has no functionality of its own, marker traits exist only to tell the compiler it's safe to use the type implementing a given trait in a particular context, `Unpin` informs the compiler that a given type does not need to uphold any guarnatees about whether the value in question can be safely moved
+- Just as with `Send` and `Sync`, the compiler implements `Unpin` automatically for all types where it can prove it is safe, a special case (similar to `Send` and `Sync`) is where `Unpin` is not implemented for a type, the notation for htis is `impl !Unpin for SomeType` where `SomeType` is the name of a type that does not need to uphold those guarnatees to be safe whenever a pointer to that type is used in a `Pin`
+- In other words, there are two things to keep in mind about the relationship between `Pin` and `Unpin`, first, `Unpin` is the normal case and `!Unpin` is the special case, whether a type implements `Unpin` or `!Unpin` only matters when using a pinned pointer to that type like `Pin<&mut SomeType>`
+- With a `String`, it has a length and the Unicode characters that make it up, can wrap a `String` in `Pin`, however, `String` automtically implements `Unpin` as do most other types in Rust, as a result, can do things that would be illegal if `String` implemented `!Unpin` instead, such as replacing one string with another at the exact same locagtion in memory, this doesn't violate the `Pin` contract because `String` has no internal references that make it unsafe to move around which is why it implements `Unpin` rahter than `!Unpin`
+- Originally tried ot make the futures produced by async blocks into a `Vec<Box<dyn Future<Output = ()>>>`, but those futures may have internal references so they don't implement `Unpin`, they need to be pinned and then can pass the `Pin` type into the `Vec`, confident that the underlying data in the futures will not be moved
+- `Pin` and `Unpin` are mostly important for building lower-level libraries, or when building a runtime itself, rather than for day-to-day things
+- This combination of `Pin` and `Unpin` makes it possible to safely implement a whole class of complex types in Rust that would otherwise prove challenging because they're self-referential, types that require `Pin` show up most commonly in async Rust today, but occaisonally in other contexts too
+- The specifics of how `Pin` and `Unpin` work and the rules they're required to uphold are covered extensibely in the API documentation for `std::pin`
+
+### The `Stream` Trait
+- Streams are similar to asynchronous iterators, unlike `Iterator` and `Future`, `Stream` has no definition in the standard library, but there is a very common definition from the `futures` crate used throughouht the ecosystem
+- With definitions of the `Iterator` and the `Future` traits before looking at how a `Stream` trait might merge them together, from `Iterator`, have the idea of a sequence, its `next` method provides an `Option<Self::Item>`, from `Future`, have the idea of readiness over time: its `poll` method provides a `Poll<Self::Output>`, to represent a sequence of items that become ready over time, can define a `Stream` trait that puts those features together
+- Example: ```
+use std::pin::Pin;
+use std::task{Context, Poll};
+
+trait Stream {
+    type Item;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>>;
+}```
+- The `Stream` trait defines an associated type called `Item` for the type of items produced by the stream, this is similar to `Iterator` where there may be zero to many items, and unlike `Future`, where there is always a singel `Output`, even if it's the unit type `()`
+- Stream also defines a method to get those items, called `poll_next`, to make it clear that it polls in the same way `Future::poll` does and produces a sequence of items in teh same way `Iterator::next` does, its return type combines `Poll` with `Option`, the outer type is `Poll` because it has to be checked for readiness, just as a future does, the inner type is `Option` because it needs to signal whether there are more messages, just as an iterator does
+- Something similar will likely be added to standard library, right now is in most runtimes
+- In example in section on streaming, didn't use `poll_next` or `Stream`, but instead used `next` and `StreamExt`, could work directly in terms of the `poll_next` API by hand-writing custom `Stream` state machines and could work with futures directly via their `poll` method, using `await` is much nicer though, and the `StreamExt` trait supplies the `next` method to do that
+- Example: ```
+trait StreamExt {
+    async fn next(&mut self) -> Option<Self::Item>
+    where 
+        Self: Unpin;
+}```
+- The actual definition used earlier looks different because it supports versions of Rust that did not support async functions in traits, as a result, it looked like `fn next(&mut self) -> Next<'_, Self> where Self: Unpin;`, the `Next` type is a `struct` what implements `Future` and allows naming the lifetime of the reference to `self` with `Next<'_, Self>` so that `await` can work with this method
+- The `StreamExt` trait is also the home of all the interesting methods to use with Streams, `StreamExt` is automatically implemented for every type that implements `Stream` but these traits are defined separately to enable the community to iterate on convenience APIs without affecting the foundational trait, in the version of `StreamExt` used in the `trpl` crate, the trait not only defines the `next` method but also supplies a default implementation of `next` that correctly handles the details of caliling `Stream::poll_next`, this means that even when needing to write a custom streaming data type, only have to implement `Stream` and then oether users of the data type can use `StreamExt` and its methods with it automatically 
+
+## Putting It All Together: Futures, Tasks, and Threads

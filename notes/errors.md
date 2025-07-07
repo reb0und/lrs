@@ -122,7 +122,7 @@
 - Cannot be used in this `main` function since it has the return type of `()`, not `Result`
 - Only can use `?` operator in a function that returns `Result`, `Option` or another type that implements `FromResidual`
 - To fix error, change return type to be compatible with value using the `?` operator on, other choice is to us a `match` or one of the `Result<T, E>` methods ot handle the `Result<T, E>` in whatever way is appropriate
-- `?` can be used with `Option<T>` values as well, can only use `?` on `Option` on a function that returns an `Option`, same behavior as when called on a `Result<T, E>`, if value is `None`, none will be returned early from teh function, if the value is `Some`, `Some`'s internal value is the resultant value of the expression
+- `?` can be used with `Option<T>` values as well, can only use `?` on `Option` on a function that returns an `Option`, same behavior as when called on a `Result<T, E>`, if value is `None`, none will be returned early from the function, if the value is `Some`, `Some`'s internal value is the resultant value of the expression
 - `?` won't automatically convert a `Result` to an `Option` or vice versa, in those cases, can use methods like the `ok` method on `Result` or the `ok_or` method on `Option` to do the conversion explicitly
 - `main` function typically returns `()`, there are restrictions on what its return type can be for the program to behave as expected
 - `main` can also return a `Result<(), E>`

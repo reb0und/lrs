@@ -155,7 +155,7 @@ add_one = { path = "../add_one" }```
 - Making all the crates in a workspace use the same dependencies, means the crates will always be compatible with each other
 - Even though `rand` is used somewhere in the workspace, cannot use it in other crates in the workspace unless adding `rand` to their Cargo.toml files as well
 - Despite this, no additional copies of `rand` will be downloaded
-- Cargo will ensure that every crate in every package in the workspace using teh `rand` package will use teh same version as long as they specify compatible versions of `rand`, saving space and ensuring that the crates in the workspace will be compatible with each other
+- Cargo will ensure that every crate in every package in the workspace using the `rand` package will use the same version as long as they specify compatible versions of `rand`, saving space and ensuring that the crates in the workspace will be compatible with each other
 - If the creates in the workspace specify incompatible versions of the same dependency, Cargo will resolve each of them, but still try to resolve as few versions as possible
 
 #### Addint a Test to a Workspace

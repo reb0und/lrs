@@ -954,3 +954,74 @@ trait StreamExt {
 - The `StreamExt` trait is also the home of all the interesting methods to use with Streams, `StreamExt` is automatically implemented for every type that implements `Stream` but these traits are defined separately to enable the community to iterate on convenience APIs without affecting the foundational trait, in the version of `StreamExt` used in the `trpl` crate, the trait not only defines the `next` method but also supplies a default implementation of `next` that correctly handles the details of caliling `Stream::poll_next`, this means that even when needing to write a custom streaming data type, only have to implement `Stream` and then oether users of the data type can use `StreamExt` and its methods with it automatically 
 
 ## Putting It All Together: Futures, Tasks, and Threads
+- Threads provide one approach to concurrency, can also use async with futures and streams, in many cases instead of choosing one or the other can use both threads and async
+- Many OS have supplied threading-based concurrency models and many languages support them as a result, models still have tradeoffs, on many OS, they use a fair bit of memory per thread and have some overhead for startup and shutdown, threads are also only an option when OS and hardware support them, unlike mainstream desktop and mobile computers, some embedded systems don't have an OS at all, so no threads
+- The async model provides a different (and complementary) set of tradeoffs, in the async model, concurrent operations don't require their own threads, they can run on tasks as when `trpl::spawn_task` was used to kick off work from a synchronous function in the streams section, a task is similar to a thread but instead of being managed by OS is managed by library-level code: the runtime
+- Can build a stream by using an async channel and spawning an async task that can be called from synchronous code, can do the same thing with a thread, previously used `trpl::spawn_task` and `trpl::sleep`, can replace these with `thread::spawn` and `thread:sleep` APIs from the standard library in the `get_intervals` function
+- Example: ```
+use std::pin::pin;
+use std::time::Duration;
+use std::thread;
+use trpl::{ReceiverStream, Stream, StreamExt};
+
+fn main() {
+    trpl::run(async {
+        let intervals = get_intervals()
+            .throttle(Duration::from_millis(100))
+            .take(10);
+
+        let mut stream = pin!(intervals);
+
+        while let Some(count) = stream.next().await {
+            println!("count: {count}");
+        }
+    });
+}
+
+fn get_intervals() -> impl Stream<Item = u32> {
+    let (tx, rx) = trpl::channel();
+
+    thread::spawn(move || {
+        let mut count = 0;
+        loop {
+            thread::sleep(Duration::from_millis(1));
+            count += 1;
+
+            if let Err(send_error) = tx.send(count) {
+                eprintln!("error sending {count} {send_error}");
+                break;
+            }
+        }
+    });
+
+    ReceiverStream::new(rx)
+}```
+- Despite one of the functions spawning an async task on the runtime and the other spawning an OS thread, the resulting streams were unaffected by the differences
+- Despite the similarities between spawning an async task and using an OS thread, the two approaches are quite different, can spawn millions of async tasks but doing same with threads would run out of memory
+- There is a reason the two APIs are so similar: threads act as a boundary for sets of synchronous operations; concurrency is possible between threads, tasks act as a boundary for sets of asynchronous operations, concurrency is possible both between and within tasks, because a task can switch between futures in its body, futures are Rust's most granular set of concurrency and each future may represent a tree of other futures, the runtime (its executor), manages tasks, and tasks manage futures, tasks are similar to lighteight, runtime-managed, threads with added capabilities that come from being managed by a runtime instead of by the operating system
+- This doesn't mean that async tasks are always better than threads, concurrency with threads is in some ways a simpler programming model than concurrency with `async`, that can be a strength or weakness, threads are somewhat fire and forget, they have no native equivalent to a future, so they simply run to completion without being interruptedexcept by the operating system itself, there is no built-in support for intratask concurrency the way futures do, threads in Rust also have no mechanisms for cancellation, whenever a future is ended, its state is cleaned up correctly
+- These limitations also make threads harder to compose than futures, it's much more difficult to use threads to build helpers such as the `timeout` and `throttle` methods built earlier, the fact that futures are richer data structures mean they can be composed together more naturally
+- Tasks give additional control over futures, allowing the selection of where and how to group them, threads and tasks often work very well together because tasks can (at least in some runtimes) be moved around between threads, in fact, under the hood, the runtime in use (including the `spawn_blocking` and `spawn_task` functions) is multithreaded by default, many runtimes use an approach called work stealing to transparently move taks around between threads, based on how the threads are currently being utilized, to improve the system's overall performance, this approach actually requires threads and tasks, and therefore futures
+- When considering which method to use consider this:
+    - If the work is parallelizable, such as processing a bunch of data where each part can be processed separately, threads are a better choice
+    - If the work is very concurrent, such as handling messages from a bunch of different sources that may come in at different intervals or different rates, async is a better choice
+- If both parallelism and concurrency are needed, don't have to choose between threads and async, can use them together freely, letting each one play the part it's best at, for example:
+- Example: ```
+fn main() {
+    let (tx, mut rx) = trpl::channel();
+
+    thread::spawn(move || {
+        for i in 1..11 {
+            tx.send(i).unwrap();
+            thread::sleep(Duration::from_secs(1));
+        }
+    });
+
+    trpl::run(async {
+        while let Some(message) = rx.recv().await {
+            println!("{message}");
+        }
+    });
+}```
+- Begin by creating an async channel, then spawn a thread that takes ownership of the sender side of the channel, within the thread, can send the numbers 1 through 10, sleeping for a second between each, finally run a future created with an async block passed to `trpl::run`, in the future, those messages are awaited
+- To return to the original scenario, imagine running a set of video encoding tasks using a dedicated thread (since video encoding is compute-bound) but notifying the UI that those operations are done with an async channel

@@ -196,7 +196,7 @@
 ### Alternate File Paths
 - For a module named `front_of_house` declared in the crate root, the compiler will look for the module's code in src/front_of_house.rs or src/front_of_house/mod.rs (older style but still supported path)
 - For a module named `hosting` that is a submodule of `front_of_house`, the compielr will look for the modules code in: src/front_of_house/hosting.rs or src/front_of_house/hosting/mod.rs (older but still supported style), cannot use both styles for the same module, using mix of styles can be confusing, downside with using mod.rs is many files named mod.rs which can be confusing when open in editor at same time
-- Note that `use` has no impact on what files are compiled as part of the crate, the `mod` keyword declares modules and Rust lokos in a file with teh same name as the module for the code that goes into that module
+- Note that `use` has no impact on what files are compiled as part of the crate, the `mod` keyword declares modules and Rust lokos in a file with the same name as the module for the code that goes into that module
 
 ### Summary
 - Rust letsa package be split up into multiple crates and a crate into modules so they can refer to items defined in one module from another module

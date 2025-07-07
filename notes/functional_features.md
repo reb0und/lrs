@@ -190,7 +190,7 @@ fn shoes_in_size(shoes: Vec<Shoe>, shoe_size: u32) -> Vec<Shoe> {
     shoes.into_iter().filter(|s| s.size == shoe_size).collect()
 }```
     - `filter` is used with a closure that captures the `shoe_size`variable from its environment to iterate over a collection of `Shoe` struct instances, it will only return shoes that are the specified size
-    - The `shoes_in_size` function takes ownership of a vector of shoes and a shoe size as parameters, it returns a vector containing only shoes of the specified size, in teh body of `shoes_in_size`, `filter` is called to adapt that iterator into a new iterator that only contains elements for which the closure returns true, the closure captures the `shoe_size` parameter from the environment, keeping only shoes of the size specified, finally calling `collect` gathers the values returned by the adapted iterator into a vector that's returned by the function
+    - The `shoes_in_size` function takes ownership of a vector of shoes and a shoe size as parameters, it returns a vector containing only shoes of the specified size, in the body of `shoes_in_size`, `filter` is called to adapt that iterator into a new iterator that only contains elements for which the closure returns true, the closure captures the `shoe_size` parameter from the environment, keeping only shoes of the size specified, finally calling `collect` gathers the values returned by the adapted iterator into a vector that's returned by the function
 
 ## Improving the I/O Project
 - Example: ```

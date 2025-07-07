@@ -57,7 +57,7 @@
       ```pub fn notify<T: Summary>(item: &T) {
           println!("news");
       }```
-- This is equivalent to the example in the previous section but more verbose, place trait bounds with teh declaration of the generic type parameter after a colon inside angle brackets
+- This is equivalent to the example in the previous section but more verbose, place trait bounds with the declaration of the generic type parameter after a colon inside angle brackets
 - the `impl Trait` syntax is convenient and makes for more concise code in simple cases, while the fuller trait bound syntax can express more complexity in other cases
 - Using `impl Trait` is appropriate if wanting function to allow `item1` and `item2` to have different types as long as both impement `Summary`
    - Example: `pub fn notify(item1: &impl Summary, item2: &impl Summary) {`

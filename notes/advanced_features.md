@@ -204,7 +204,7 @@ unsafe impl Foo for i32 {
 - Miri doesn't catch everything that may be incorrect when writing unsafe code, it is a dynamic analysis tool, only catches problems with code that actually gets run, need to use in conjunction with good testing techniques to increase confidence about hte unsafe code that is written
 
 ### When to Use Unsafe Code
-- Using `unsafe` to use one of the five superpowers just discussed isn't wrong or even frowned upon, but it is tricker to get `unsafe` code correct because the compiler cna't help uphold memory safety, when there is a reason to use `unsafe` code, can do so, and having the `explicit` unsafe annotation makes it easier to track down the source of problems when they occur, whenever writing unsafe code, can use Miri to help be more confident that the code written upholds Rust's rules
+- Using `unsafe` to use one of the five superpowers just discussed isn't wrong or even frowned upon, but it is tricker to get `unsafe` code correct because the compiler can't help uphold memory safety, when there is a reason to use `unsafe` code, can do so, and having the `explicit` unsafe annotation makes it easier to track down the source of problems when they occur, whenever writing unsafe code, can use Miri to help be more confident that the code written upholds Rust's rules
 
 ## Advanced Traits
 
@@ -369,9 +369,9 @@ fn main() {
 - For associated functions that aren't methods, there would not be a receiver, there would only be the list of other arguments, could use fully qualified syntax everywhere that methods and functions can be called, however, allowed to omit any part of this syntax that Rust can figure out from other multiple implementations that use the same name and Rust needs help to identify which implementation to call
 
 ### Using Superatraits
-- Somtimes, may write a trait definition that depends on another trait: for a type to implement the first trait, want to require that type to also implement a second trait, would also do this so that trati definition can make use of the associated items of the second trait, the trait that the trait definition is relying on is called a supertrait of the trait
+- Somtimes, may write a trait definition that depends on another trait: for a type to implement the first trait, want to require that type to also implement a second trait, would also do this so that trait definition can make use of the associated items of the second trait, the trait that the trait definition is relying on is called a supertrait of the trait
 - To make an `OutlinePrint` trait with an `outline_print` method that will print a given value formatted so that it's framed in asterisks, that is given a `Point` struct that implements the standard library trait `Display` to result in `(x, y)`, when calling `outline_print` on a `Point` instance that has `1` for `x` and `3` for `y`, it should print it in a box of asterisks
-- In the implementation of the `outline_print` method, want ot use the `Display` trait's functionality, neeed to specify that the `OutlinePrint` trait will work only for types that also implement `Display` and provide the funcionality that `OutlinePrint` needs, can do this in the trati definition by specifying `OutlinePrint: Display`, this is similar to adding a trait bound to the trait
+- In the implementation of the `outline_print` method, want ot use the `Display` trait's functionality, neeed to specify that the `OutlinePrint` trait will work only for types that also implement `Display` and provide the funcionality that `OutlinePrint` needs, can do this in the trait definition by specifying `OutlinePrint: Display`, this is similar to adding a trait bound to the trait
 - Example: ```
 trait OutlinePrint: fmt::Display {
     fn outline_print(&self) {
@@ -413,3 +413,153 @@ fn main() {
 - The implementation of `Display` uses `self.0` to access the inner `Vec<T>` because `Wrapper` is a tuple struct and `Vec<T>` is the item at index 0 in the tuple, then can use the functionality of the `Display` trait on `Wrapper`
 - The downside of using this technique is that `Wrapper` is a new type, so it doesn't have the methods of the value it's holding, would have to implement all the methods of `Vec<T>` directly on `Wrapper` such that the methods delegate to `self.0` which would allow treating `Wrapper` exactly like the `Deref` trait on the `Wrapper` to return the inner type would be a solution, if not wanting the `Wrapper` type to have all the methods of the inner type, to restrict the `Wrapper` type's behavior, would have to implement just the wanted methods manually
 - This newtype pattern is also useful even when traits are not involved
+
+## Advanced Types
+
+### Using the Newtype Pattern for Type Safety Abstraction
+- The newtype pattern is also useful for tasks such as statically enforcing that values are never confused and indicating the units of a value, the `Milimeters` and `Meters` structs wrapped `u32` values in a newtype, if writing a function with a parameter of type `Milimeters`, wouldn't be able to compile a program that accidentally tried to call that function with a value of type `Meters` or a plain `u32`
+- Can also use the newtype pattern to abstract away some implementation details of a type, the new type can expose a public API that is different from the API of the private inner type
+- Newtypes can also hide internal implementation, for example, can provide a `People` type to wrap a `HashMap<i32, String>` that stores a person's ID associated with their name, code using `People` would only interact with the public API provided, such as a method to add a name string to the `People` collection, that code wouldn't need to know that an `i32` ID is assigned to names internally, the newtype pattern is a lightweight way to achieve encapsulation to hide implementation details
+
+### Creating Type Synonyms with Type Aliases
+- Rust provides the ability to declare ea type alias to give an existing type another name, for this can use the `type` keyword, for example, can create the alias `Kilometers` to `i32` like so: `type Kilometers = i32;`
+- Now, the alias Kilometers is a synonym for `i32`, unlike the `Milimeters` and `Meters` types previously created, `Kilometers` is not a separate, new type, values that have the type `Kilometers` will be treated the same as values of type `i32`
+- Example: ```
+type Kilometers = i32;
+
+fn main() {
+    let x: i32 = 5;
+    let y: Kilometers = 5;
+    
+    println!("x + y = {}", x + y);
+}```
+- Since kilometers and `i32` are the same type, can add values of both types and can pass `Kilometers` values to functions that take `i32` parameters, however using this method don't get the type-checking benefits from the newtype pattern, mixing up `Kilometers` and `i32` won't give a compiler error
+- The main use case for type synonyms is to reduce repition, for example, might have a lengthy type like this: `Box<dyn Fn() + Send + 'static>`, writing this lengthy type in function signatures and as type annotations all over the code can be tiresome and error prone, a type alias makes this code more mangeable by reducing the reptition, here, have introduced an alias named `Thunk` for the verbose type and can replace all uses of the type with the shorter alias `Thunk` for the verbose type and can replace all uses of the type with the shorter alias `Thunk`
+- Example: ```
+type Thunk = Box<dyn Fn() + Send + 'static>;
+
+let f: Thunk = Box::new(|| println!("hi"));
+
+fn takes_long_type(f: Thunk) {}
+
+fn returs_long_type() -> Thunk {}```
+- This code is much easier to read and write, choosing a meaningful name for a type alias can help communicate intent as well (thunk is a word for code to be evaluated at a later time, appropriate name for a closure that gets stored)
+- Type aliases are commonly used with the `Result<T, E>` type for reducing reptition, consider the `std::io` module in the standard library, I/O operations often return a `Result<T, E>` to handle situations when operations fail to work, the library has a `std::io::Error` struct that represents all possible I/O errors, many of the functions in `std::io` will be returning `Result<T, E>`, where the `E` is `std::io::Error`, such as these functions in the `write` trait (incomplete list)
+- Example: ```
+pub trait Write {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Error>;
+}```
+- The `Result<..., Error>` is repeated a lot, as such, `std::io` has the type alias declaration, `type Result<T> = std::result::Result<T, std::io::Error>;`
+- Since this declaration is in the `std::io` module, can use the fully qualified alias `std::io::Result<T>`, that is, a `Result<T, E>` with the `E` filled in as `std::io::Error`, the `write` trait function signatures end up looking like this: ```
+type Result<T> = std::result::Result<T, std::io::Error>;
+
+pub trait Write {
+    fn write(&mut self, buf: &[u8]) -> Result<usize>;
+}```
+- The type alias helps in two ways: it makes code easier to write and it gives a consistent interface across all of `std::io` since it's an alias, it's just another `Result<T, E>`, which means can use any methods that work on `Result<T, E>` with it, as well as special syntax like the `?` operator
+
+### The Never Type That Never Returns
+- Rust has a special type named `!` that's known in type theory lingo as the empty type because it has no values, called the never type because it stands in the place of the return type when a function will never return
+- Example: `fn bar() -> ! {}`
+- This code is read as the function `bar` returns never, functions that return never are called diverging functions, can't create values of the type `!` so `bar` can never possibly return
+- All match arms must return the same type
+- `continue` has a `!` value, when Rust computes the types of `guess`, it looks at both match arms, the former with a value of `u32` and the latter with a `!` value, since `!` can never have a value, Rust decides that the type of `guess` is `u32`
+- The formal way to describe this behavior, is that expressions of type `!` can be coerced into any other type, allowed to end this `match` arm with `continnue` because `continue` doesn't return a value, instead it moves control back to the top of the lop, so in the `Err` case, never assign a value to `guess`
+- The never type is useful with the `panic!` macro as well, when using the `unwrap` function called on `Option<T>` values to produce a value or panic with this definition: ```
+impl <T> Option<T> {
+    pub fn unwrap(self) -> T {
+        match self {
+            Some(val) => val,
+            None => panic!("called unwrap on a none val"),
+        }
+    }
+}```
+- In this code, the same thing happens as in the `match`, Rust sees that the `val` has the type `T` and `panic!` has the type `!` so the result of the overall `match` expression is `T`, this code works because `panic!` doesn't produce a value, it ends the program, in the `None` case, won't be returning a value from `unwrap`, so this code in valid
+- One final expression that has the `!` type is a `loop`: `loop {}`
+- Here, the loop never ends, so `!` is the value of the expression, however this wouldn't be true if this included a `break` since the loop would terminate when it got to the `break`
+
+### Dynamically Sized Types and the `Sized` Trait
+- Rust needs to know certain details about its types, such as how much space to allocate for a value of a particular type, sometimes referred to as DSTs or unsized types, these types allow writing code using values whose size can only be known from runtime
+- Dynamically sized type called `str`, on its own `str` is a DST, can't know how long the string is until runtime, meaning can't create a variable of type `str`, nor can an argument of type `str` be taken
+- Example: `let s1: str = "Hello";`
+- The previous code won't work, Rust needs to know how much memory to allocate for any value of a particular type, and all values of a type must use the same amount of memory, if Rust allowed this code, these two `str` values would need to take up the same amount of space, but `&str`s have different lengths, `s1` needs 5 bytes and another `str` may need more, which is why it's not possible to create a variable holding a dynamically sized type
+- In this case, need to make the types of `s1` and `s2` a `&str` rather than a `str`, the slice data structure just stores the starting position and the length of the slice, although `&T` is a single value that stores the memory address of where the `T` is located, a `&str` is two values:  the ddress of the `str` and its length, as such, can know the size of a `&str` value at compile time, it's twice the length of a `usize`, always know the size of a `&str`, no matter how long the string it refers to is, this is generally the way in which dynamically sized types are used in Rust, they have an extra bit of metadata that stores the size of the dynamic information, the golden rule of dynamically sized types is that the values of dynamically sized types must always be put behind a pointer of some kind
+- Can combine `str` with all kinds of pointers, for example `Box<str` or `Rc<str>`, in fact, can use a different dynamically sized type: traits, every trait is a dynamically sized type that can be referred to by using the nae of the trait, trait objects must be placed behind a pointer such as `&dyn Trait` or `Box<dyn Trait>`
+- To work with DSTs, Rust provides the `Sized` trait to determine whether or not a type's size is known at compile time, this trait is automatically implemented for everything whose size is known at compile time, in addition, Rust implicitly adds a bound on `Sized` to every generic function, such as a generic function defined like this: `fn generic<T>(t: T) {}`, is actually treated like this: `fn generic<T: Sized>(t: T) {}`, by default, generic functions will only work on types with a known size at compile time, however, can use special syntax to relax this restriction: `fn generic<t: ?Sized>(t: &T) {}`, a trait bound on `?Sized` means `T` may or may not be sized and this notation overrides the default that generic typesmust have a known size at compile time, the `?Trait` syntax with this meaning is only available for `Sized` not any other traits
+- Have switched the type of the `t` parameter from `T` to `&T`, because the type might not be `Sized`, need to use it behind some kind of pointer, this case, have chosen a reference
+
+## Advanced Functions and Closures
+- This covers advanced features releated to functions and closures, including function pointers and returning closures
+
+### Function Pointers
+- Can pass regular functions to functions, this is useful when wanting to pass a function already defined rahter than defining a closure, functions coerce to the `fn` type (not the `Fn` closure trait), the `fn` type is called a function pointer, passing functions with function pointers allow usage of functions as arugments to other functions
+- The syntax for specifying that a parameter is a function pointer is similar to that of closures, here there is a function `add_one` that adds 1 to its parameter, the function `do_twice` takes two parameters: a function pointer to any function that takes an `i32` and returns an `i32`, and one `i32` value, the `do_twice` function calls the function `f` twice, passing it the `arg` value, then adds the two function call results together, the `main` function calls `do_twice` with the arguments `add_one` and `5`
+- Example: ```
+fn add_one(x: i32) -> i32 {
+    x + 1
+}
+
+fn do_twice(f: fn(i32) -> i32, arg: i32) -> i32 {
+    f(arg) + f(arg)
+}
+
+fn main() {
+    println!("{}", do_twice(add_one, 5));
+}```
+- This code prints `12`, have specified that the parameter `f` in `do_twice` is an `fn` that takes one parameter of type `i32` and returns an `i32`, can call `f` in the body of `do_twice`, in `main` can pass the function name `add_one` as the first arguments to `do_twice`
+- Unlike closures, `fn` is a type rather than a trait, can specify `fn` as the parameter type directly rather than declaring a generic type parameter with one of the `Fn` traits as a trait bound
+- Function pointers implement all three closure traits (`Fn`, `FnMut`, and `FnOnce`), meaning, can always pass a function pointer as an argument for a function ath expects a closure, it's best to write functions using a generic type and one of the closure traits so functions can accept either functions or closures
+- One example of where to only accept `fn` and not clpsures is when interfacing with external code that doesn't have closures: C functions can accept functions as arguments but doesn't have closures
+- An example of where to use either a closure defined inline or a named function, a use of the `map` method provided by the `Iterator` trait in the standard library, to use the `map` method to turn a vector of numbers into a vector of strings, can use a closure
+- Example: ```
+    let list_of_nums = vec![1, 2, 3];
+    let list_of_strs: Vec<String> = list_of_nums.iter().map(|i| i.to_string()).collect();```
+- Can name a function as the argument to map instead of the closure: ```
+let list_of_nums = vec![1, 2, 3];
+let list_of_strs: Vec<String> = list_of_nums.iter().map(ToString::to_string).collect();```
+- Must use the fully qualified syntax since there are multiple functions available named `to_string`, here have used the `to_string` function defined in the `ToString` trait which the standard library has implemented for any type that implememnts `Display`
+- The name of each enum variant defined also becomes an initializer funciton, can use these initializer functions as function pointers that implement the closure traits, meaning, can specify the initializer functions as arugments for methods that take closures
+- Example: ```
+enum Status {
+    Value(u32),
+    Stop,
+}
+
+let list_of_statuses: Vec<Status> = (0u32..20).map(Status::Value).collect();```
+- Here, have created `Status::Value` instances using each `u32` value in the range that `map` is called on by using the initializer function of `Status::Value`, both styles compile to same code, should opt to use cleaner version
+
+### Returning Closures
+- Closures are represented by traits, which means can't return closures directly, in most cases, might want to return a trait, can instead use the concrete type that implements the trait as the return value of the function, however, can't do that with closures because they don't have a concrete type that is returnable, can't use the function pointer `fn` as a return type if the closure captures any values from its scope, instead will normally use the `impl Trait` syntax, can return any function type using `Fn`, `FnOnce`, and `FnMut`
+- Example: ```
+fn returns_closure() -> impl Fn(i32) -> i32 {
+    |x| x + 1
+}```
+- Each closure is also its own distinct type, if needing to work with multiple functions that have the same signature but different implementations, will need to use a trait object for them
+- Example: ```
+fn returns_closure() -> impl Fn(i32) -> i32 {
+    |x| x + 1
+}
+
+fn returns_initialized_closure(init: i32) -> impl Fn(i32) -> i32 {
+    move |x| x + init
+}
+
+let handlers = vec![returns_closure(), returns_initialized_closure(123)];
+for handler in handlers {
+    let output = handler(5);
+    println!("{output}");
+}```
+- Have two functions, `returns_closure` and `returns_initialized_closure` which both return `impl Fn(i32) -> i32`, the closures they return are different even though they implement the same type, Rust won't let this compile
+- The error message indicates that whenever returning an `impl Trait` Rust creates a unique opque type, a type where cannot see into the details of what Rust constructs, so even though these functions both return closures that implements the same trait, `Fn(i32) -> i32`, the opaque types Rust generates for each are distinct, this is similar to how Rust produces different concrete types for distinct async blocks even when they have the same output type, can use a trait object
+- Example: ```
+fn returns_closure() -> Box<dyn Fn(i32) -> i32> {
+    Box::new(|x| x + 1)
+}
+
+fn returns_initialized_closure(init: i32) -> Box<dyn Fn(i32) -> i32> {
+    Box::new(move |x| x + init)
+}```
+- This code compiles
+
+## Macros
+- 

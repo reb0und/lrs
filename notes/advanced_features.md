@@ -23,7 +23,7 @@
 - To isolate unsafe code as much as possible, is best to enclose such code within a safe abstraction and provide a safe API, parts of the standard library are implemented as safe abstractions over unsafe code that has been audited, wrapping unsafe code in a safe abstraction prevents use of `unsafe` from leaking out into all the places to use functionality implemented with `unsafe` code, because a safe abstraction in safe
 
 ### Dereferencing a Raw Pointer
-- Compiler ensures references are always valid, unsafe Rust has two new types called raw pointers that are similar to references, as with references, raw pointers can be immutable or mutable and are written as `*const T` and `*mut T` respectively, the asterisk isn't the dereference operator, it's part of the type name, in teh context of raw pointers immutable means that the pointer can't be directly assigned after being dereferenced
+- Compiler ensures references are always valid, unsafe Rust has two new types called raw pointers that are similar to references, as with references, raw pointers can be immutable or mutable and are written as `*const T` and `*mut T` respectively, the asterisk isn't the dereference operator, it's part of the type name, in the context of raw pointers immutable means that the pointer can't be directly assigned after being dereferenced
 - Different from references and smart pointers, raw pointers:
     - Are allowed to ignore the borrowing rules by having both immutable and mutable pointers or multiple mutable pointers to the same location
     - Aren't guaranteed to point to valid memory
@@ -36,7 +36,7 @@
         let r1 = &raw const num;
         let r2 = &raw mut num;```
 - No `unsafe` keyword included in this code, can create raw pointers in safe code, can't dereference raw pointers outside an unsafe block
-- Have created raw pointers by using teh raw borrow operators: `&raw const num` creates a `*const i32` immutable raw pointer and `&raw mut num` creates `*mut i32` mutable raw pointerHave created raw pointers by using teh raw borrow operators: `&raw const num` creates a `*const i32` immutable raw pointer and `&raw mut num` creates `*mut i32` mutable raw pointer, since these were created directly from a local variable, these particular raw pointers are valid but can't make that assumption about any raw pointer
+- Have created raw pointers by using the raw borrow operators: `&raw const num` creates a `*const i32` immutable raw pointer and `&raw mut num` creates `*mut i32` mutable raw pointerHave created raw pointers by using the raw borrow operators: `&raw const num` creates a `*const i32` immutable raw pointer and `&raw mut num` creates `*mut i32` mutable raw pointer, since these were created directly from a local variable, these particular raw pointers are valid but can't make that assumption about any raw pointer
 - Can create a raw pointer whose validity can't be so certain of, using `as` to cast a value instead of using the raw borrow operators, can create a raw pointer to an abritrary location in memory doing this:
 ```
     let address = 0x12345usize;
@@ -54,7 +54,7 @@
     unsafe  {
         println!("{}, {}", *r1, *r2);
     }```
-- Creating a pointer does no harm, only when trying to access teh value that it points at, might end up dealing with an invalid value
+- Creating a pointer does no harm, only when trying to access the value that it points at, might end up dealing with an invalid value
 - These are `*const i32` and `*mut i32` raw pointers that point to the same location in memory, where `num` is stored, if instead created an immutable and mutable reference to `num`, code wouln't have compiled because Rust's ownership rules don't allow a mutable reference at the same time as any immutable references, with raw pointers, can create a mutable pointer and an immutable pointer to the same location and cahnge the data through hte mutable pointer, potentially creating a data race
 - One major use of raw pointers is interfacing with C code, another case is when building up safe abstractions that the borrow checker doesn't understand
 
@@ -90,7 +90,7 @@ fn split_at_mut(values: &mut [i32], mid: usize) -> (&mut [i32], &mut [i32]) {
 
     (&mut values[..mid], &mut values[mid..])
 }```
-- This function gets the total length of the slice, then asserts that the index given as a parameter is within teh slice by checking whether it's less than or equal to the length, the assertion means if passing in a value that is greater than the length to split the indx at, the function will panic before attempting to use that index, then returning two mutable slices in a tuple, one from teh start of the original slice, to the `mid` index and another from `mid` to the end of the slice
+- This function gets the total length of the slice, then asserts that the index given as a parameter is within the slice by checking whether it's less than or equal to the length, the assertion means if passing in a value that is greater than the length to split the indx at, the function will panic before attempting to use that index, then returning two mutable slices in a tuple, one from the start of the original slice, to the `mid` index and another from `mid` to the end of the slice
 - Rust's borrow checker can't tell that the two borrows are different parts of the slice, it only knows that this is borrowing from the same slice, borrowing from different parts is fundamentally okay because the two slices aren't overlapping, but Rust isn't smart enough to know this, when knowing the code is ok but Rust does not, use unsafe code
 - This is the implementation using an `unsafe` block, a raw pointer, and some calls to unsafe functions to make the implementaton of `split_at_mut` work
 - Example: ```
@@ -110,7 +110,7 @@ fn split_at_mut(values: &mut [i32], mid: usize) -> (&mut [i32], &mut [i32]) {
 - Slices are a pointer to some data and the length of the slice, can use the `len` method to get the length of a slice and the `as_mut_ptr` method to access the raw pointer of a slice, because there is a mutable slice to `i32` values, `as_mut_ptr` returns a raw pointer with the type `*mut i32` which is stored in the variable `ptr`
 - Kept the assertion that the `mid` index is wihtin the slice, then get to the unsafe code, the `slice::from_raw_parts_mut` function takes a raw pointer and a length, and creates a slice, can use it to create a slice that starts from `ptr` and is `mid` items long, can then call the `add` method on `ptr` with `mid` as an argument to get a raw pointer that starts at `mid`, and create a slice using that pointer and the remaining number of items after `mid` as the length
 - The function `slice::from_raw_parts_mut` is unsafe because it takes a raw pointer and must trust that this pointer is valid, the `add` method on raw pointers is also unsafe because it must trust that the offset location is also a valid pointer, must place in `unsafe` block around calls to `slice::from_raw_parts_mut` and `add` so can call them, by looking at code and adding the assertion that `mid` must be less than or equal to `len`, can tell that all the raw pointers used within the `unsafe` block will be valid pointers to data within the slice, this is an acceptable and appropriate used of `unsafe`
-- Don't need to mark teh resultant `split_at_mut` function as `unsafe` and can call this function from safe Rust, have created a safe abstraction to the unsafe code with an implementation of the function that uses `unsafe` code in a safe way, since it creates only valid pointers from the data this function has access to
+- Don't need to mark the resultant `split_at_mut` function as `unsafe` and can call this function from safe Rust, have created a safe abstraction to the unsafe code with an implementation of the function that uses `unsafe` code in a safe way, since it creates only valid pointers from the data this function has access to
 - In contrast, this use of `slice::from_raw_parts_mut` would likely crash when the slice is used, the code takes an arbitrary memory location and creates a slice 10,000 items long
 - Example: ```
 use std::slice;
@@ -132,7 +132,7 @@ unsafe extern "C" {
 unsafe {
     println!("abs val of -5 according to C: {}", abs(-5));
 }```
-- Within the `unsafe extern "C"` block, have listed the names and signatures of external functions from another language to call, the `"C"` part defines which application binary interface (ABI) the external function uses, the ABI defines how to call the function at the assembly level, the `"C"` ABI is the most common and follows the C programming language's ABI, info about all teh ABIs Rust supports is available in the Rust Reference
+- Within the `unsafe extern "C"` block, have listed the names and signatures of external functions from another language to call, the `"C"` part defines which application binary interface (ABI) the external function uses, the ABI defines how to call the function at the assembly level, the `"C"` ABI is the most common and follows the C programming language's ABI, info about all the ABIs Rust supports is available in the Rust Reference
 - Every item declared within an `unsafe extern` block is implicitly unsafe, some FFI functions are safe to call, the `abs` function from C's standard library does not have any memory safety considerations and know it can be called with any `i32`, in cases like this, can use the `safe` keywrod to say that this specific function is safe to call even though it is in an `unsafe extern` block, after making that change, calling it no longer requires an `unsafe` block
 - Example: ```
 unsafe extern "C" {
@@ -209,4 +209,207 @@ unsafe impl Foo for i32 {
 ## Advanced Traits
 
 ### Associated Types
-- 
+- Associated types connect a type plaeholder with a trait such that the trait method definition can use these placeholder types in their signatures, the implementor of a trait will specify the concrete type to be used instead of the placeholder type for the particular implementation, this way, can define a trait that uses some types without needing to know exactly what those types are until the trait is implemented
+- One example of a trait with an associated type is the `Iterator` trait that the standard library provides, the associated type is named `Item` and stands in for the type of the values the type implementing the `Iterator` trait is iterating over
+- Example: ```
+pub trait Iterator {
+    type Output;
+
+    fn next(&mut self) -> Option<Self::Output>;
+}```
+- The type `Items` is a placeholder, and the `next` method's definition shows that it will return values of the type `Option<Self::Item>`, implementors of the `Iterator` trait will specify the concrete type for `Item` and the `next` method and will return an `Option` containing a value of that concrete type
+- Associated types may seem similar to generics, in that the latter allows defining a function without specifying what types it can handle
+- To look at differences between the two, will look at an implementation of the `Iterator` trait on a type named `Counter` that specifies the `Item` is type `u32`
+- Example: ```
+impl Iterator for Counter {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<Self::Item> {}
+}```
+- Potential `Iterator` trait implementation with generics: ```
+pub trait Iterator<T> {
+    fn next(&mut self) -> Option<T>;
+}```
+- Difference is that when using generics, must annotate the types in each implementation since `Iterator<String> for Counter` or any other type, could have multiple implementations of `Iterator` for `Counter`, when a trait has a generic parameter, it can be implemented for a type multiple times, changing the concrete types if the generic type parameters each time, when using the `next` method on `Counter`, would have to provide type annotations to indicate which implementation of `Iterator` to use
+- With associated types, don't need to annotate types since can't implement a trait on a type multiple times, with definition using associated types, can choose what the type of `Item` will be only once, since there can only be one `impl Iterator for Counter`, don't have to specify intention of an iterator of `u32` values everywhere to call `next` on `Counter`
+- Associated tyeps also become part of the trait's contract, implementors of the trait must provide a type to stand in for the associated type placeholder, associated types often have a name to describe how the type will be used, and documenting the associated type in the API documentation is good practice
+
+### Default Generic Type Parameters and Operator Overloading
+- When using generic type parameters, can specify a default concrete type for the generic type to eliminate the need for implementors of the trait to specify a concrete type if the default type works, can specify a default type when declaring a generic type with the `<PlaceholderType=ConcreteType>` syntax
+- This technique is useful when with operator overloading, when customizing the behavior of operators such as `+`
+- Rust doesn't allow creating new operators or overloading arbitrary operators, but can overload the operators and corresponding traits in `std::ops` by implementing the traits associated with the operator, can overload the `+` operator to add two `Point` instances together, can do this by implemeting the `Add` trait on a `Point` struct
+- Example: ```
+use std::ops::Add;
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+impl Add for Point {
+    type Output = Point;
+
+    fn add(self, other: Point) -> Point {
+        Point {
+            x: self.x + other.x,
+            y: self.y + other.y,
+        }
+    }
+}
+
+fn main() {
+    assert_eq!(Point { x: 1, y: 0 } + Point { x: 2, y: 3 }, Point { x: 3, y: 3 });
+}```
+- The `add` method adds the `x` values of two `Point` instances and the `y` values to create a new `Point`, hte `Add` trait has an associated type named `Output` that determines the type returned from the `add` method
+- The default generic type in this code is within the `Add` trait 
+- Example: ```
+trait Add<Rhs=Self> {
+    type Output;
+
+    fn add(self, rhs: Rhs) -> Self::Output;
+}```
+- This is a trait with one method and an associated type, the new part is `Rhs=Self`, this syntax is called a default type parameters, the `Rhs` generiic type parameter is short for right-hand side, and defines the type of the `rhs` parameter in the `add` method, to not specify a concrete type for `Rhs` when implementing the `Add` trait, the type of `Rhs` will default to `Self` which will be the type implementing `Add` on
+- When implementing `Add` for `Point`, used the default for `Rhs` since wanted to add two `Point` instances, here is an example of implementing the `Add` trait where customizing the `Rhs` rather than using the default
+- Two structs, `Milimeteres` and `Meteres`, holding values in different units, this thin wrapping of an existing type in another struct is known as the newtype pattern, want to add values in milimeters to values in meters and have the implementation of `Add` do the conversion correctly, can implement `Add` for `Milimeters` with `Meters` as the `Rhs`
+- Example: ```
+impl Add for Point {
+    type Output = Point;
+
+    fn add(self, other: Point) -> Point {
+        Point {
+            x: self.x + other.x,
+            y: self.y + other.y,
+        }
+    }
+}```
+- To add `Milimeters` and `Meters`, can specify `impl Add<Meters>` to set the value of the `Rhs` type parameter instead of using the default of `Self`
+- Default type parameters are used in two ways:
+    - To extend a custom type without breaking existing code
+    - To allow customization in specific cases most users won't need
+- The standard library's `Add` trait is an example of the second purpose, can add two like types, but the `Add` trait provides the ability to customize beyond that, using a default type parameter, in the `Add` trait definition means don't have to specify the extra parameter most of the time, in other words, a bit of implementation boilerplate isn't needed, making it easier to use the trait
+- The first purpose is similar to the second but in reverse, to add a type parameter to an existing trait, can give it a default to allow extension of the functioanlity of the trait without breaking the existing implementation code
+
+### Disambiguating Between Methods with the Same Name
+- Nothing in Rust prevents a trait from having a method with the same name as another trait's method, nor does Rust prevent from implementing both traits on one type, it's also possible to implement a method directly on the type with the same name as methods from traits
+- When calling methods with the same name, will need ot tell Rust which oen to use, here have defined two traits, `Pilot` and `Wizard`, both have a method called `fly`, then implement both traits on a type `Human` that already has a method called `fly` implemented on it, each `fly` method does something different
+- Example: ```
+trait Pilot {
+    fn fly(&self);
+}
+
+trait Wizard {
+    fn fly(&self);
+}
+
+struct Human;
+
+impl Pilot for Human {
+    fn fly(&self) {
+        println!("called pilot on human");
+    }
+}
+
+impl Wizard for Human {
+    fn fly(&self) {
+        println!("called wizard on human");
+    }
+}
+
+impl Human {
+    fn fly(&self) {
+        println!("called fly on human");
+    }
+}```
+- When calling `fly` on an instance of `Human`, the compiler defaults to calling the method directly implemented on that type
+- Example: ```
+fn main() {
+    let person = Human;
+    person.fly();
+}```
+- Running this code will print `called fly on human`, showing that Rust called the `fly` method implemented on `Human` directly
+- To call the `fly` methods from either the `Pilot` trait or the `Wizard` trait, need to use more explicit syntax to specify which `fly` method is intended
+- Example: ```
+    let person = Human;
+    Pilot::fly(&person);
+    Wizard::fly(&person);
+    person.fly();```
+- Specifying the trait name before the method clarifies to Rust which implementation of `fly` to call, could also write `Human::fly(&person)`, which is equivalent to `person.fly()`, but this is a bit longer to write if there is no need to disambiguate
+- If there was two types that both implement one trait, Rust could figure out which implementation of a trait to use based on the type of `self`
+- However, associated functions that are not methods don't have a `self` parameter, when there are multiple types or traits that define non-method functions with the same function name, Rust doesn't always know which type to use unless using fully qualified syntax, here, have created a trait for an animal shelter that wants to name all baby dogs Spot, can make an `Animal` trait with an associated non-method function `baby_name`, the `Animal` trait is implemented for the struct `Dog`, on which also provide an associated non-method function `baby_name` directly
+- Example: ```
+trait Animal {
+    fn baby_name() -> String;
+}
+
+struct Dog;
+
+impl Dog {
+    fn baby_name() -> String {
+        String::from("spot")
+    }
+}
+
+impl Animal for Dog {
+    fn baby_name() -> String {
+        String::from("puppy")
+    }
+}
+
+fn main() {
+    println!("a baby dog is called a {}", Dog::baby_name());
+}```
+- Have implemented the code for naming all puppies Spot in the `baby_name` associated function that is defined on `Dog`, the `Dog` type also implements the trait `Animal`, which describes characteristics that all animals have, baby dogs are called puppies, this is expressed in the implementation of the `Animal` trait on `Dog` in the `baby_name` function associated with the `Animal` trait
+- In `main`, can call the `Dog::baby_name` function which calls the assocaited function defined on `Dog` directly
+- If changing the code to use `Animal::baby_name()`, get a compilation error, since `Animal::baby_name` doesn't have a `self` parameter and there could be other types that implement the `Animal` trait, Rust can't figure out which implementation of `Animal::baby_name` to use
+- To disambiguate and tell Rust to use the implementation of `Animal` for `Dog` as opposed to the implementation of `Animal` for some other type, need to use fully qualified syntax
+- Example: `println!("a baby dog is called a {}", <Dog as Animal>::baby_name());`
+- Need to provide Rust with a type annotation within the angle brackets, which indicates to call the `baby_name` method from the `Animal` trait as implemented on `Dog` by saying to treat the `Dog` type as an `Animal` for this function call
+- In general, fully qualified syntax is as follows: `<Type as Trait>::function(recevier_if_method, next_arg, ...);`
+- For associated functions that aren't methods, there would not be a receiver, there would only be the list of other arguments, could use fully qualified syntax everywhere that methods and functions can be called, however, allowed to omit any part of this syntax that Rust can figure out from other multiple implementations that use the same name and Rust needs help to identify which implementation to call
+
+### Using Superatraits
+- Somtimes, may write a trait definition that depends on another trait: for a type to implement the first trait, want to require that type to also implement a second trait, would also do this so that trati definition can make use of the associated items of the second trait, the trait that the trait definition is relying on is called a supertrait of the trait
+- To make an `OutlinePrint` trait with an `outline_print` method that will print a given value formatted so that it's framed in asterisks, that is given a `Point` struct that implements the standard library trait `Display` to result in `(x, y)`, when calling `outline_print` on a `Point` instance that has `1` for `x` and `3` for `y`, it should print it in a box of asterisks
+- In the implementation of the `outline_print` method, want ot use the `Display` trait's functionality, neeed to specify that the `OutlinePrint` trait will work only for types that also implement `Display` and provide the funcionality that `OutlinePrint` needs, can do this in the trati definition by specifying `OutlinePrint: Display`, this is similar to adding a trait bound to the trait
+- Example: ```
+trait OutlinePrint: fmt::Display {
+    fn outline_print(&self) {
+        let output = self.to_string;
+        let len = output.len();
+        println!("{}", "*".repeat(len + 4));
+        println!("*{}*", " ".repeat(len + 4));
+        println!("* {output} *");
+        println!("*{}*", " ".repeat(len + 2));
+        println!("{}", "*".repeat(len + 4))
+    }
+}```
+- Since have specified that `OutlinePrint` requires the `Display` trait, can use the `to_string` function that is automatically implemented for any type that implements `Display`, if trying to use `to_string` without adding a colon and specifying the `Display` trait after the trait name, would get an error saying that no method named `to_string` was found for the type `&Self` in the current scope
+- When implementing `OutlinePrint` on a type that doesn't implement `Display`, such as the `Point` struc, will get an error saying that `Display` is not implemented
+- To fix this, implement `Display` on `Point` and satisfy the constraint that `OutlinePrint` requires
+- Example: ```
+impl fmt::Display for Point {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "({}, {})", self.x, self.y)
+    }
+}```
+- Then, implementing the `OutlinePrint` trait on `Point` will compile successfully, and can call `outline_print` on a `Point` instance to display it within an outline of asterisks
+
+### Using the Newtype Pattern to Implement External Traits on External Types
+- The orphan rule states that only allowed to implement a trait on a type if either the trait or the type or both are local to the crate, can get around this restriction with the newtype pattern, which involves creating a new type in a tuple struct, the tuple struct will have one field and be a thin wrapper around the type for which to implement a trait, then the wrapper type is local to the crate and can implement the trait on the wrapper, Newtype is a term that originates from Haskell, there is no runtime performance from using this pattern and the wrapper type is elided at compile time
+- As an example, to implement `Display` on `Vec<T>`, which the orphan rule prevents from doing directly because the `Display` trait and the `Vec<T>` type are defined outside the crate, can make a `Wrapper` struct that holds an instance of `Vec<T>` then can implement `Display` on `Wrapper` and use the `Vec<T>` value
+- Example: ```
+struct Wrapper(Vec<String>);
+
+impl fmt::Display for Wrapper {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "[{}]", self.0.join(", "))
+    }
+}
+
+fn main() {
+    let w = Wrapper(vec![String::from("hi"), String::from("hello")]);
+}```
+- The implementation of `Display` uses `self.0` to access the inner `Vec<T>` because `Wrapper` is a tuple struct and `Vec<T>` is the item at index 0 in the tuple, then can use the functionality of the `Display` trait on `Wrapper`
+- The downside of using this technique is that `Wrapper` is a new type, so it doesn't have the methods of the value it's holding, would have to implement all the methods of `Vec<T>` directly on `Wrapper` such that the methods delegate to `self.0` which would allow treating `Wrapper` exactly like the `Deref` trait on the `Wrapper` to return the inner type would be a solution, if not wanting the `Wrapper` type to have all the methods of the inner type, to restrict the `Wrapper` type's behavior, would have to implement just the wanted methods manually
+- This newtype pattern is also useful even when traits are not involved

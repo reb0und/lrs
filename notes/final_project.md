@@ -37,7 +37,7 @@ fn main() {
 - The `bind` function returns a `Result<T, E>`, which indicates that it's possible for binding to fail, for example, connecting to port 80 requires administrator privileges (non-administrators can only listen to ports higher than 1023) if trying to connect to port 80 without being an administrator, this wouldn't work, binding also wouldn't work, binding also woulnd't work if running two sintances of the program and two programs listening to same port, won't worry about these kinds of errors here, will just use `unwrap` to stop this program if errors happen
 - The `incoming` method on `TcpListener` returns an iterator that gives a sequence of streams (streams of type `TcpStream`)
 - A single stream represetns an open connection between the client and the server, a connection is the name for the full request and response process in which a client connects to the server, the server generates a response, and the server closes the connection, as such, will ready from the `TcpStream` to see what the client sent and then write response in the stream to send dat aback to the client, this `for` loop will process each connection in turn and produce a series of streams to handle
-- For now, handling of the stream consists of calling `unwrap` to terminate the program if the stream has any errors, if there aren't any errors, the program prints a message, will add functionality for the success case in the next listing, the reason errors may be received from the `incoming` method when a client conncets to the server is that this isn't actually iterating over connections, instead, it iterates over connection attempts, the connection might not be successful for a number of reasons, many of them are operating system specific, for example, many operating systems limit the number of simultaneous connections, new connection attempts beyond this limit produce an error until some of the open connections are closed
+- For now, handling of the stream consists of calling `unwrap` to terminate the program if the stream has any errors, if there aren't any errors, the program prints a message, will add functionality for the success case in the next listing, the reason errors may be received from the `incoming` method when a client conncets to the server is that this isn't actually iterating over connections, instead, it iterates over connection attempts, the connection might not be successful for a number of reasons, many of them are operating system specific, for example, many operating systems limit the number of simultaneous connections, new connection attempts beyond this limit produce an error until some of the open connections are closedG
 - Browser will show error like "connection reset" when running this because the server currently doesn't send any data back but there are multiple connections established
 - Will sometimes see multiple messages printed for one browser request, the reason might be that the browser is making a request for the page as well as a request for other resources, like the favicon.ico that appears in the browser tab
 - Could also be that the browser is trying to connect to the server multiple times because the server isn't responding with any data
@@ -47,3 +47,39 @@ fn main() {
 - Need to stop program by pressing `ctrl`-`c` when done with particular version of the code, then restarting the program by invoking the `cargo run` commad after making changes to the code
 
 ### Reading the Request
+- Need function to get connection and take some action with the connection, `handle_connection` to read data from the TCP stream and print it to see the data being sent from the browser
+- Example: ```
+use std::{
+    io::{BufReader, prelude::*},
+    net::{TcpListener, TcpStream},
+};
+
+fn main() {
+    let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
+
+    for stream in listener.incoming() {
+        let stream = stream.unwrap();
+
+        handle_connection(stream);
+    }
+}
+
+fn handle_connection(stream: TcpStream) {
+    let buf_reader = BufReader::new(&stream);
+    let http_request: Vec<_> = buf_reader
+        .lines()
+        .map(|result| result.unwrap())
+        .take_while(|line| !line.is_empty())
+        .collect();
+
+    println!("{:#?}", http_request);
+}```
+- Have brought `std::io::prelude` and `std::io::BufReader` into scope to get access to traits and types to read and write to the stream in the `for` loop in the `main` function instead of printing a message that says a connection has been established, now call the new `handle_connection` function and pass the `stream` to it
+- In the `handle_connection` function, have created a new `BufReader` instance that wraps a reference to the `stream`, the `BufReader` adds buffering by managing calls to the `std::io::Read` trait methods
+- Have created a variable `http_request` to collect the lines of the request the browser sends to the server, have indicated to collect these lines in a vector by adding a `Vec<_>` type annotation
+- `BufReader` implements the `std::io::BufRead` trait which provides the `lines` method, which returns an iterator of `Result<String, std::io::Error>` by splitting the stream of data whenever it sees a newline byte
+- To get each `String`, can map and `unwrap` each `Result`, the `Result` might be an error if the data isn't valid UTF-8 or if there was a problem reading from the stream, a production program should handle these errors more gracefully, choosing to stop the program in error case for simplicity
+- The browser signals the end of na HTTP request by sending two newline characters in a row, so to get one request from the stream, can take lines until receiving a line that is the empty string, once collected the lines into the vector, they are printed using pretty debug formatting to review the instructions the web browser sends to the server
+- Can figure out why this receives multiple connections by looking at the path after `GET` in the first line of the request, if the repeated connections are all requesting /, the browser is retrying to fetch / repeatedly because it's not getitng a response from the program
+
+### A Closer Look at an HTTP Request

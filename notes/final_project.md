@@ -218,11 +218,90 @@ fn handle_connection(mut stream: TcpStream) {
     stream.write_all(response.as_bytes()).unwrap();
 }```
 - This switches from `if` to `match` now that there are three cases, need to explicitly match on a slice of `request_line` to pattern match against the string literal values: `match` doesn't do automatic referencing and dereferencing like the equality method does
-- The first arm is the same as the `if` block from earlier and checks if the URI is / to respond with hello.html, the second arm matches a request to /sleep, when the request is received, teh server will sleep for five seconds before rendering a successful HTML page, the third arm is the same as the `else` block from earlier that checks whether none of the previous cases have been met
+- The first arm is the same as the `if` block from earlier and checks if the URI is / to respond with hello.html, the second arm matches a request to /sleep, when the request is received, the server will sleep for five seconds before rendering a successful HTML page, the third arm is the same as the `else` block from earlier that checks whether none of the previous cases have been met
 - This is quite primitive, real libraries would handle the recognition of multiple requests in a much less verbose way
 - When querying /sleep and then loading /, / will wait until `sleep` has slept for its full five seconds before loading
 - There are multiple techniques to avoid requests backing up behind a slow request, including using async, the one to implement here is a thread pool
 
 ### Improving Throughput with a Thread Pool
 - A thread pool is a group of spawned threads that are waiting and ready to handle a task, when the program receives a new task, it assigns one of the threads in the pool in to the task, and that thread will process the task
+- The remaining threads in the pool are available to handle any other tasks that come in while the first thread is processing, when the first thread is done processing its task, it's returned to the pool of idle threads, ready to handle a new task, a thread pool allows processing of connections concurrently, increasing the throughput of a server
+- Will limit the number of threads in the pool to a small number to protect from DoS attacks, if program created a new thread for each request as it came in, making millions of requests to a server could created havoc by using up all server's resources and grdining the processing of requests to a halt
+- Instead of spawning unlimited threads, will have a fixed number of threads in the pool
+- Requets that come in are sent to the pool for processing, the pool will maintain a queue of incoming requests, each of the threads in the pool will pop off a request from this queue, handle the request, then ask the queue for another request, with this design, can process up to `*N*` requests concurrently, where `*N*` is the number of threads, if each thread is responding to a long-running request, subsequent requests can still back up in the queue, but have increased the number of long-running requests to handle before reaching that point
+- This technique is one of many ways to improve the throughput of a web server, other options to explore are the fork/join model, the single-threaded async I/O model, and the multithreaded async I/O model
+- Before begining to implement the thread pool, should determine the structure of the pool, when designing code, writing the client interface first can help guide the design, writing the API of the code so it's structured in the way it should be called, then implementing functionality within that structure rather than implementing the functionality the public API
+- Similar to using TDD earlier, will use compiler-driven development here, will write code that calls the functions intended, then will look at errors from the compiler to determine what to change to get the code to work, before doing that, will explore the technique not to use as a starting point
+
+#### Spawning a Thread for Each Request
+- First, will explore how code may look if it did create a new thread fo revery connection, this isn't the final plan due to the problems with potentially spawning an unlimited number of threads, but it is a starting point to get a working multithreaded server first, will add the thread pool as an improvement, and contrasting the two solutions will be easier
+- Will make changes to `main` to spawn a ne thread to handle each stream within the `for` loop
+- Example: ```
+fn main() {
+    let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
+
+    for stream in listener.incoming() {
+        let stream = stream.unwrap();
+
+        thread::spawn(|| {
+            handle_connection(stream);
+        });
+    }
+}```
+- `thread::spawn` will create a new thread, and then run the code in the closure in the new thread, if running this code and then /sleep in the browser, then other more / in other tabs, will see that the requests don't need to wait for /sleep to finish, but htis will eventually overwhelm the system since new threads would be created without any limit, this is the kind of situation where async and await are valuable
+
+#### Creating a Finite Number of Threads
+- Wnat teh thread pool to work in a similar, familiar way, so that switching from threads to a thread pool doesn't require large changes to the code that uses the API, here is a hypothetical interface for a `ThreadPool` structto use instead of `thread::spawn`
+- Example: ```
+fn main() {
+    let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
+
+    let pool = ThreadPool::new(4);
+
+    for stream in listener.incoming() {
+        let stream = stream.unwrap();
+
+        pool.execute(|| {
+            handle_connection(stream);
+        });
+    }
+}```
+- Used `ThreadPool::new1` to create a new thread pool with a configurable number of threads, in this case, four, then, in the `for` loop, `pool.execute` has a similar interface as `thread::spawn` in that it takes a closure in the pool should run for each stream, need to implement `pool.execute` so it takes the closure and gives it to a thread in the pool to run, this code won't compile yet, but will try so the compiler can guide in how to fix it
+
+#### Building `ThreadPool` Using Compiler Driven Development
+- After making the previous changes to src/main.rs, and running compiler from `cargo check`, get an error stating that `ThreadPool` type or module is needed so need to build one, will switch the `hello` crate from a binary crate to a library crate to hold the `ThreadPool` implementation, after changing to a library crate, can also use the separate thread pool library for any work to do using a thread pool, not just serving web requests
+- Will create a src/lib.rs file that contains a simple definition of a `ThreadPool` struct: `pub struct ThreadPool`
+- Then bringing `ThreadPool` into scope from the library craye by adding the following code to the top of `src/main.rs`: `use hello::ThreadPool;`
+- Code still does not work, error states that need to add associated function `new` for `ThreadPool`
+- Also know that `new` needs to have one parameter that can accept `4` as an argument and should return a `ThreadPool` instance, will implement the simplest `new` function that will have those characteristics
+- Example: ```
+pub struct ThreadPool;
+
+impl ThreadPool {
+    fn new(size: usize) -> ThreadPool {
+        ThreadPool
+    }
+}```
+- Have chosen `usize` as the type of the `size` parameter because a negative number of threads doesn't make any sense, also know to use this `4` as the number of elements in a collection of threads, which is what the `usize` type is for
+- Now, current error is that the `execute` method is missing on `ThreadPool`, have decided current thread pool should have an interface similar to `thread::spawn`, in addition, will implement the `execute` function so it takes the closure it's given and gives it to an idle thread in the pool to run
+- Will define the execute method on `ThreadPool` to take a closure as a parameter, closures can be taken as parameters with three different traits: `Fn`, `FnMut`, and `FnOnce`, need to decide which kind of closure to use here, will end up doing something similar to the standard library `thread::spawn` implementation, can look at what bounds the signature of `threads::spawn` has on its parameter, the documentation shows the following: ```
+pub fn spawn<F, T>(f: f) -> JoinHandle<T>
+    where
+        F: FnOnce() -> T,
+        F: Send + 'static,
+        T: Send + 'static,```
+- The `F` type parameter is important here, the `T` type parameter is related to the return value, can see that `spawn` uses `FnOnce` as the trait bound on `F`, this is likely what is wanted as well because will eventually pass the argument obtained in `execute` to `spawn`
+    - Also using `FnOnce` as the trait to use because the thread for running a request will only execute that request's closure one time, which matches the `Once` in `FnOnce`
+- The `F` parameter also has the trait bound `Send` and the lifetime bound `'static`, which are useful in this situation, need to transfer the closure from one thread to another and `'static` because it is unknown how long the thread will take to execute, will create an `execute` method on `ThreadPool` that will take a generic parameter of type `F` with these bounds: ```
+impl ThreadPool {
+    pub fn execute<F>(&self, f: F)
+    where:
+        F: FnOnce() + Send + 'static,
+    {}
+}```
+- Will stil use the `()` after `FnOnce` because this `FnOnce` represents a closure that takes no parameters and returns the unit type `()` just like function definitions, the return type can be omitted from the signature, but even if there are no parameters, will still need the parentheses
+- Current code compiles, if running `cargo run` and making request, will not have correct behavior, library isn't actually calling the closure passed to `execute` yet
+- If this were a real, complete, project, this would be a good time to start writing unit tests to check that the code compiles and has the correct behavior
+
+#### Valdiating the Number of Threads in `new`
 - 

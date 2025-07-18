@@ -251,7 +251,7 @@ fn main() {
 - `thread::spawn` will create a new thread, and then run the code in the closure in the new thread, if running this code and then /sleep in the browser, then other more / in other tabs, will see that the requests don't need to wait for /sleep to finish, but htis will eventually overwhelm the system since new threads would be created without any limit, this is the kind of situation where async and await are valuable
 
 #### Creating a Finite Number of Threads
-- Wnat teh thread pool to work in a similar, familiar way, so that switching from threads to a thread pool doesn't require large changes to the code that uses the API, here is a hypothetical interface for a `ThreadPool` structto use instead of `thread::spawn`
+- Wnat the thread pool to work in a similar, familiar way, so that switching from threads to a thread pool doesn't require large changes to the code that uses the API, here is a hypothetical interface for a `ThreadPool` structto use instead of `thread::spawn`
 - Example: ```
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
@@ -304,4 +304,267 @@ impl ThreadPool {
 - If this were a real, complete, project, this would be a good time to start writing unit tests to check that the code compiles and has the correct behavior
 
 #### Valdiating the Number of Threads in `new`
-- 
+- Not doing anything with the parameters to `new` and `execute`, need to implement the bodies of these functions with the desired behavior
+    - With `new`, chose an unsigned type for the size parameter since a pool with a negative number of threads makes no sense, a pool with zero threads also makes no sense, but zero is a valid `usize`, need to add code to check that `size` is greater than zero before returning a `ThreadPool` instance and having the program panic if it receives a zero using the `assert!` macro
+- Example: ```
+    /// Create a new ThreadPool.
+    ///
+    /// The size is the number of threads in the pool.
+    ///
+    /// # Panics
+    ///
+    /// The `new` function will panic if the size is zero
+    pub fn new(size: usize) -> ThreadPool {
+        assert!(size > 0);
+
+        ThreadPool
+    }```
+- Have also added some documentation for `ThreadPool` with doc comments
+- Have followed good documentation practices by adding a section that calls out the situations in which the function can panic, can view docs using `cargo doc --open`
+- Instead of adding the `assert!` macro as done here, could change the `new` into `build` and return a `Result` as done earlier with `Config::build` in I/O project, but have decided that trying to create a thread pool without any threads should be an unrecoverable error
+- A function named build would be similar to the following: `pub fn build(size: usize) -> Result<ThreadPool, PoolCreationError> {}`
+
+#### Creating a Space to Store the Threads
+- Now that there is a way to know there is a valid number of threads to store in the pool, can create those threads and store them in the `ThreadPool` struct before returning the struct
+- `thread::spawn` function returns a `JoinHandle<T>`, where `T` is the type that the closure returns, in this case the closures passed to the thread pool will handle the connection and not return anything, so `T` will just be the unit type `()`
+- The following code will compile but won't create any threads yet, have changed the definition of `ThreadPool` to hold a vector of `thread::JoinHandle<()>` instances, initialized the vector with a capacity of size, set up a `for` loop that will run some code to create the threads and returned a `ThreadPool` instance containing them
+- Example: ```
+use std::thread;
+
+pub struct ThreadPool {
+    threads: Vec<thread::JoinHandle<()>>,
+}
+
+impl ThreadPool {
+    /// Create a new ThreadPool.
+    ///
+    /// The size is the number of threads in the pool.
+    ///
+    /// # Panics
+    ///
+    /// The `new` function will panic if the size is zero
+    pub fn new(size: usize) -> ThreadPool {
+        assert!(size > 0);
+
+        let mut threads = Vec::with_capacity(size);
+
+        for _ in 0..size {
+            // create threads and store them in the vector
+        }
+
+        ThreadPool { threads }
+    }```
+- Have brought `std::thread` into scope in the library crate becuase this uses `thread::JoinHandle` as the type of the items in the `ThreadPool`, once a valid size is received, the `ThreadPool` creates a new vector that can hold `size` items, the `with_capacity` function performs the same task as `Vec::new` but pre-allocates space in the vector, since it is known that `size` elements need to be stored in the vector, this doing this allocation up front is more efficient than using `Vec::new`, which resizes itself as elements are inserted
+
+#### A `Worker` Struct Responsible for Sending Code from the `ThreadPool` to a `Thread`
+- Left a comment in the `for` loop regarding the creation of threads, will look at how to actually create threads, the standard library provides `thread::spawn` as a way to create threads, and `thread::spawn` expects to get some code the thread should run as soon as the thread is created, however, in this case, want to create the threads and have them wait for code that will be sent later, the standard library's implementation of threads doesn't hinclude any way to do this and will implement this manually
+- Will implement this behavior by introducing a new data structure between the `ThreadPool` and the threads that will manage this new behavior, will call this data structure Worker, which is a common term in pooling implementations, the `Worker` picks up code that needs to be run and runs the code in the Worker's thread
+- The workers wait until orders come in from customers, and then they're responsible for taking those orders and fulfilling them
+- Instead of storng a vector of `JoinHandle<()>` instances in the thread pool, will store instances of the `Worker` struct, each `Worker` will store a single `JoinHandle<()>` instance, then will implement a method on `Woker` that will take a closure of code to run and send it to the already running thread for execution, will also give each `Worker` and `id` to distinguish between the different instances of `Worker` in the pool when logging or debugging
+- Here is the new process that will happen when creating a `ThreadPool`, will implement the code that sends the closure to the thread after `Worker` is set up in this way:
+    1. Define a `Worker` struct that holds an `id` and a `JoinHandle<()>`
+    2. Change `ThreadPool` to hold a vector of `Worker` instances
+    3. Define a `Worker::new` function that takes an `id` number and returns a `Worker` instance that holds the `id` and a thread spawned with an empty closure
+    4. In `ThreadPool::new`, will use the `for` loop counter to generate an `id`, create a new `Worker` with that `id`, and store the worker in the vector
+- Example: ```
+use std::thread;
+
+pub struct ThreadPool {
+    workers: Vec<Worker>,
+}
+
+impl ThreadPool {
+    /// Create a new ThreadPool.
+    ///
+    /// The size is the number of threads in the pool.
+    ///
+    /// # Panics
+    ///
+    /// The `new` function will panic if the size is zero
+    pub fn new(size: usize) -> ThreadPool {
+        assert!(size > 0);
+
+        let mut workers = Vec::with_capacity(size);
+
+        for id in 0..size {
+            // create workers and store them in the vector
+            // workers.push(worker);
+            workers.push(Worker::new(i));
+        }
+
+        ThreadPool { workers }
+    }
+
+    pub fn execute<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        // 1. select worker from pool queue
+        // 2. run task
+        // 3. add new worker to queue?
+        // alternatively could find way to borrow thread and run task
+    }
+}
+
+struct Worker {
+    id: usize,
+    thread: thread::JoinHandle<()>,
+}
+
+impl Worker {
+    fn new(id: usize) -> Worker {
+        let thread = thread::spawn(|| {});
+
+        Worker { id, thread }
+    }
+}```
+- Have changed the name of the field on `ThreadPool` from `threads` to `workers` because it's now holding `Worker` instances insteaf of `JoinHandle<()>`, have used the counter in the `for` loop as an argument to `Worker::new`, and stored each new `Worker` in the vector named `workers`
+- External code such as the server in src/main.rs don't need to know the implementation details regarding a worker struct within `ThreadPool`, so `Worker` struct and its `new` function are private, the `Worker::new` function uses the `id` given and stores a `JoinHandle<()>` instance created by spawning an empty closure
+- Note: if the operating system can't create a thread because there aren't enough system resources, `thread::spawn` will panic which will cause the whole server to panic, even though the creation of some threads might succeed, for simplicity's sake, this behavior is fine, but in a production thread pool implementation, may want to use `std::thread::Builder` and its `spawn` method that returns `Result` instead
+- This code will compile and will store the number of `Worker` instances specified as an argument to `ThreadPool::new` but this still isn't processing the closure obtained in `execute`, will look at how to do that next
+
+#### Sending Requests to Threads via Channels
+- Next problem is that the closures given to `thread::spawn` do nothing, currently, get the closure to execute in the `execute` method, but then, need to give `thread::spawn` a closure to run when creating each `Worker` during the creation of the `ThreadPool`
+- Want the `worker` structs that were created to fetch the code to run from a queue held in the `ThreadPool` and send that code to its thread to run
+- Channels are a simple way to communicate between two threads, good for this use case, can ue a channel to function as the queue of jobs, and `execute` will send a job from the `ThreadPool` to the `Worker` instances, which will send the job to its thread, here is the plan:
+    1. The `ThreadPool` will create a channel and hold on to the sender
+    2. Each `Worker` will hold on to the receiver
+    3. Will create a new `Job` struct that will hold the closures to send down the channel
+    4. The `execute` method will send the job it wants to execute through the sender
+    5. In its thread, the `Worker` will loop over its receiver and execute the closures of any jobs it receives
+- Will start by creating a channel in `ThreadPool::new` and holding the sender in the `ThreadPool`, the `Job` struct doesn't hold anything for now but will be the type of the item to send down the channel
+- Example: ```
+use std::{sync::mpsc, thread};
+
+pub struct ThreadPool {
+    workers: Vec<Worker>,
+    sender: mpsc::Sender<Job>,
+}
+
+struct Job;
+
+impl ThreadPool {
+    /// Create a new ThreadPool.
+    ///
+    /// The size is the number of threads in the pool.
+    ///
+    /// # Panics
+    ///
+    /// The `new` function will panic if the size is zero
+    pub fn new(size: usize) -> ThreadPool {
+        assert!(size > 0);
+
+        let (sender, receiver) = mpsc::channel();
+
+        let mut workers = Vec::with_capacity(size);
+
+        for id in 0..size {
+            // create workers and store them in the vector
+            // workers.push(worker);
+            workers.push(Worker::new(id));
+        }
+
+        ThreadPool { workers, sender }
+    }```
+- Here, have modified `ThreadPool` to store the sender of a channel that transmits `Job` instances
+- In `ThreadPool::new`, have created a new channel and have the pool hold the sender, this will compile
+- Will try passing a receiver of the channel into each `Worker` as the thread pool creates the channel, want to use the receiver in the thread that the `Worker` instances spawn to reference the `receiver` parameter in the closure, this won't compile yet
+- Example: ```
+    pub fn new(size: usize) -> ThreadPool {
+        assert!(size > 0);
+
+        let (sender, receiver) = mpsc::channel();
+
+        let mut workers = Vec::with_capacity(size);
+
+        for id in 0..size {
+            // create workers and store them in the vector
+            // workers.push(worker);
+            workers.push(Worker::new(id, receiver));
+        }
+
+        ThreadPool { workers, sender }
+    }
+
+    impl Worker {
+        fn new(id: usize, receiver: mpsc::Receiver<Job>) -> Worker {
+            let thread = thread::spawn(|| {
+                receiver;
+            });
+
+            Worker { id, thread }
+        }
+    }```
+- Have made small and straightforward changes, passed the receiver into `Worker::new` and then used it inside the closure
+- This code results in an error, code is trying to pass `receiver` to multiple `Worker` instances, this won't work because the channel implementation is multiple producer and single consumer, means can't just clone the consuming end of the channel to fix this, also don't want to send a message multiple times to multiple consumers, want one list of messages with multiple `Worker` instances such that each message gets processed once
+- Additionally, taking a job off the channel queue involves mutating the `receiver`, so the threads need a safe way to share and modify `receiver`, otherwise, might get race conditions
+- Can use `Arc`, thread-safe smart pointers to share ownership across multiple threads and allow the threads to mutate the value, `Arc<Mutex<T>>` can be used
+    - The `Arc` type will let multiple `Worker` instances own the receiver, and `Mutex` will ensure that only one `Worker` gets a job from the receiver at a time
+- Example: ```
+    pub fn new(size: usize) -> ThreadPool {
+        assert!(size > 0);
+
+        let (sender, receiver) = mpsc::channel();
+
+        let receiver = Arc::new(Mutex::new(receiver));
+
+        let mut workers = Vec::with_capacity(size);
+
+        for id in 0..size {
+            workers.push(Worker::new(id, Arc::clone(&receiver)));
+        }
+
+        ThreadPool { workers, sender }
+    }
+
+    impl Worker {
+        fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
+            let thread = thread::spawn(|| {
+                receiver;
+            });
+
+            Worker { id, thread }
+        }
+    }```
+- In `ThreadPool::new`, have put the receiver in an `Arc` and a `Mutex`, for each new `Worker`, clone the `Arc` to bump the reference count so the `Worker` instances can share ownership of the receiver
+
+#### Implementing the `execute` Method
+- Will implement the `execute` method on `ThreadPool`, will also change `Job` from a struct to a type alias for a trait object that holds the type of closure that `execute` receives, type aliases allow making long types shorter for ease of use
+- Example: ```
+    type Job = Box<dyn FnOnce() + Send + 'static>;
+
+    pub fn execute<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let job = Box::new(f);
+
+        self.sender.send(job).unwrap();
+    }```
+- Creating a `Job` type alias for a `Box` that holds each closure and then sending the job down the channel
+- After creating a new `Job` instance using the closure obtained in `execute`, will send that job down the sending end of the channel, have called `unwrap` on `send` for the case that sending fails, this might happen if, for example, all threads are stopped from executing, meaning the receiving end has stopped reading new messages, at the moment, can't stop threads from executing: threads continue executing as long as the pool exists, the reason `unwrap` is used is that the failure case won't happen but compiler doesn't know this
+- In the `Worker`, the closure passed to `thread::spawn` still only references the receiving end of the channel, instead, need the closure to loop forever, asking the receiving end of the channel for a job and running the job when it gets one, will make the change to `Worker::new`
+- Example: ```
+impl Worker {
+    fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
+        let thread = thread::spawn(move || {
+            loop {
+                let job = receiver.lock().unwrap().recv().unwrap();
+
+                println!("Worker {id} got job, executing...");
+
+                job();
+            }
+        });
+
+        Worker { id, thread }
+    }
+}```
+- Here, first call `lock` on the `receiver` to acquire the mutex and then call `unwrap` to panic on any errors, acquiring a lock might fail if the mutex is in a poisoned state, which can happen if some other thread panicked while holding the lock, rather than releasing the lock, in this situation, calling `unwrap` to have this thread panic is the correct action to take, could change `unwrap` to an `expect` with an error message that is contextually meaningful
+- If the lock is acquired on the mutex, can call `recv` to receive a `Job` from the channel, a final `unwrap` moves past any errors here as well, which might occur if the thread holding the sender has shut down, similar to how the `send` method returns `Err` if the receiver shuts down
+- The call to `recv` blocks so if there is no job yet, the current thread will wait for a job to become available, the `Mutex<T>` ensures that only one `Worker` thread at a time is trying to request a job
+- Thread pool is now in a working state, now have a thread pool that executes asynchronously, there are never more than four threads created, so the system won't get overloaded if the server receives a lot of requests, if a request is made to /sleep, the server will be able to serve other requests by having another thread run them
+- If opening /sleep in multiple browser windows simultaneously, they might load one at a time in five-second intervals, some web browsers execute multiple instances of the same request sequentially for caching reasons, this limitation is not caused by the web server
+- `while let` loop was not used for following reasons:
+- Code with `while let` loop compiles but doesn't run desired threading behavior, a slow request will still cause other requests to wait to be processed, the reason is the following: the `Mutex` struct has no public `unlock` method because the ownership of the lock is based on the lifetime of `MutexGuard<T>` within the `LockResult<MutexGuard<T>>`, at compile time, the borrow checker can then enforce the rule that a resource guarded by a `Mutex` cannot be accessed unless holding that lock, however, this implementatin can also result in the lock being held longer than intended if not mindful of the lifetime of the `MutexGuard<T>`
+- `let job = receiver.lock().unwrap().recv().unwrap();` works because with `let`, any temporary values used in the expression on the right hand side of the equal sign are immediately dropped then the `let` statement ends, however, `while let` and `if let` and `match` don't drop temporary values until the end of the associated block, with a `while let` loop, the lock remains held for the duration of the call to `job()`, meaning other `Worker` instances cannot receive jobs

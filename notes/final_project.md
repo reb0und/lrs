@@ -568,3 +568,166 @@ impl Worker {
 - `while let` loop was not used for following reasons:
 - Code with `while let` loop compiles but doesn't run desired threading behavior, a slow request will still cause other requests to wait to be processed, the reason is the following: the `Mutex` struct has no public `unlock` method because the ownership of the lock is based on the lifetime of `MutexGuard<T>` within the `LockResult<MutexGuard<T>>`, at compile time, the borrow checker can then enforce the rule that a resource guarded by a `Mutex` cannot be accessed unless holding that lock, however, this implementatin can also result in the lock being held longer than intended if not mindful of the lifetime of the `MutexGuard<T>`
 - `let job = receiver.lock().unwrap().recv().unwrap();` works because with `let`, any temporary values used in the expression on the right hand side of the equal sign are immediately dropped then the `let` statement ends, however, `while let` and `if let` and `match` don't drop temporary values until the end of the associated block, with a `while let` loop, the lock remains held for the duration of the call to `job()`, meaning other `Worker` instances cannot receive jobs
+
+## Graceful Shutdown and Cleanup
+- Previous code is responding to requests asynchronously through the use of a thread pool as intended, receieve some warnings about the `workers`, `id`, and `thread` fields that are not used in a direct way, indicates there is no cleanup, when using `ctrl`-`c` on the main thread, all other threads are stopped immediately as well, even if they're in the middle of sending a request
+- Next, will implement `Drop` trait to call `join` on each of the threads in the pool so they can finish the requests they're working on before closing, then implement a way to tell the threads they should stop accepting new requests and shut down, to see this in action, need to modify the server to accept only two requests before gracefully shutting down its thread pool
+- One thing to notice, none of this affects the parts of the code that handle executing the closures, so everything here would just be the same if using a thread pool for an async runtime
+
+### Implementing the `Drop` Trait on `ThreadPool`
+- Will start with implementing `Drop` on the thread pool, when the pool is dropped, the threads should all join to make sure they finish their work
+- Example: ```
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        for worker in &mut self.workers {
+            println!("Shutting down worker {}", worker.id);
+
+            worker.thread.join().unwrap();
+        }
+    }
+}```
+- First this loops through each of the thread pool `workers`, use `&mut` for this because `self` is a mutable reference and also need to be able to mutate `worker`, for each worker, print a message saying that htis particular `Worker` instance is shutting down, then call `join` on that `Worker` instance's thread, if the call to `join` fails, use `unwrap` to make Rust panic and go into an ungraceful shutdown
+- Receive an error during compilation that can't call `join` because only have a mutable borrow of each `worker` and `join` tkaes ownership of its argument, to solve this issue need to move the thread out of the `Worker` instance that owns `thread` so `join` can consume the thread, one way to do this is if `Worker` held an `Option<thread::JoinHandle<()>>`, could call the `take` method on the `Option` to move the value out of the `Some` variant and leave a `None` variant in its place, in other words, a `Worker` that is running would have a `Some` variant in `thread` and when wanting to clean up a worker, would replace `Some` with `None` so the `Worker` wouldn't have a thread to run
+- However, the only time this could come up would be when dropping the `Worker`, in exchange, would need to deal with an `Option<thread::JoinHandle<()>>` anywhere accessed `worker.thread`, idiomatic Rust uses `Option` frequently, but when needing to wrap something, will always be present in `Option` as a workaround, should look for alternative approaches, they can make code cleaner and less error prone
+- A better alternative exists: the `Vec::drain` method, it accepts a range parameter to specify which items to remove from the `Vec`, and returns an iterator of those items, passing the `..` range syntax will remove every value from the `Vec`
+- Example: ```
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        for worker in self.workers.drain(..) {
+            println!("Shutting down worker: {}", worker.id);
+
+            worker.thread.join().unwrap();
+        }
+    }
+}```
+- This resolves the compiler error and does not require any other changes to code
+
+### Signaling to the Threads to Stop Listening for Jobs
+- With all the changes made, code compiles without any warning, but this code doesn't function as intended yt, the key is the logic in the closures run by the threads of the `Worker` instances, at the moment, `join` is caleld but that won't shut down the threads as they `loop` forever looking for jobs, if trying to drop the `ThreadPool` in the current implementation of `drop`, the main thread will block forever, waiting for the first thread to finish
+- To fix this thread, will need a change in the `ThreadPool` drop implementation and then a change in the `Worker` loop
+- Will first change the `ThreadPool` `drop` implementation to explicitly drop the `sender` before before waiting for the threads to finish, unlike with the thread here, do need to use an `Option` to be able to move `sender` out of `ThreadPool` with `Option::take`
+- Example: ```
+use std::{
+    sync::{Arc, Mutex, mpsc},
+    thread,
+};
+
+pub struct ThreadPool {
+    workers: Vec<Worker>,
+    sender: Option<mpsc::Sender<Job>>,
+}
+
+type Job = Box<dyn FnOnce() + Send + 'static>;
+
+impl ThreadPool {
+    /// Create a new ThreadPool.
+    ///
+    /// The size is the number of threads in the pool.
+    ///
+    /// # Panics
+    ///
+    /// The `new` function will panic if the size is zero
+    pub fn new(size: usize) -> ThreadPool {
+        assert!(size > 0);
+
+        let (sender, receiver) = mpsc::channel();
+
+        let receiver = Arc::new(Mutex::new(receiver));
+
+        let mut workers = Vec::with_capacity(size);
+
+        for id in 0..size {
+            workers.push(Worker::new(id, Arc::clone(&receiver)));
+        }
+
+        ThreadPool { 
+            workers, 
+            sender: Some(sender) ,
+        }
+    }
+
+    pub fn execute<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let job = Box::new(f);
+
+        self.sender.as_ref().unwrap().send(job).unwrap();
+    }
+}
+
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        drop(self.sender.take());
+
+        for worker in self.workers.drain(..) {
+            println!("Shutting down worker: {}", worker.id);
+
+            worker.thread.join().unwrap();
+        }
+    }
+}
+
+struct Worker {
+    id: usize,
+    thread: thread::JoinHandle<()>,
+}
+
+impl Worker {
+    fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
+        let thread = thread::spawn(move || {
+            loop {
+                let job = receiver.lock().unwrap().recv().unwrap();
+
+                println!("Worker {id} got job, executing...");
+
+                job();
+            }
+        });
+
+        Worker { id, thread }
+    }
+}```
+- Dropping `sender` closes the channel, which indicates that no more messages will be sent, when that happens, all the calls to `recv` that the `Worker` instances do in the infinite loop will return an error, need to change the `Worker` loop to gracefully exist the loop in that case, which means the threads will finish when the `THreadPool` `drop` implementation calls `join` on them
+- Example: ```
+impl Worker {
+    fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
+        let thread = thread::spawn(move || {
+            loop {
+                let message = receiver.lock().unwrap().recv();
+
+                match message {
+                    Ok(job) => {
+                        println!("Worker {id} got a job, executing...");
+
+                        job();
+                    }
+                    Err(_) => {
+                        println!("Worker {id} disconnected; shutting down");
+                        break;
+                    }
+                }
+            }
+        });
+
+        Worker { id, thread }
+    }
+}```
+- To see this in action, will modify `main` to accept only two requests before gracefully shutting down the server
+- Example: ```
+fn main() {
+    let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
+
+   let pool = ThreadPool::new(4);
+
+    for stream in listener.incoming().take(2) {
+        let stream = stream.unwrap();
+
+        pool.execute(|| {
+            handle_connection(stream);
+        });
+    }
+}```
+- Wouldn't want a real-world web server to shut down after serving only two requests, this code just demonstrates that the graceful shutdown and cleanup is in working ordder
+- The `take` method is defined on the `Iterator` trait and limits the iteration to the first two items at most, the `ThreadPool` will go out of scope at the end of `main`, and the `drop` implementation will run
+- Server will stop accepting connections after the second connection, and the `Drop` implementation on `ThreadPool` starts executing before `Worker` 3 even starts its job, dropping the `sender` disconnects all the `Worker` instances and tells them to shut down, the `Worker` instances each print a message when they disconnect, and then the thread pool calls `join` to wait for each `Worker` thread to finish
